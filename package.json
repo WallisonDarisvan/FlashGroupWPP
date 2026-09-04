@@ -1,6 +1,6 @@
 {
   "name": "flash-group-wpp",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "description": "Aplicação desktop profissional para envio automatizado e cadenciado de mensagens para grupos do WhatsApp via Evolution API v2",
   "main": "main.js",
   "scripts": {

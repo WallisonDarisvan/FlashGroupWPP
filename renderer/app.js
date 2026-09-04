@@ -330,7 +330,7 @@ FGW.setupAutoUpdateUI = function() {
         case 'not-available':
           if (elements.updateStatusText) {
             elements.updateStatusText.className = 'update-status-text';
-            elements.updateStatusText.textContent = '✓ Versão mais recente (v1.0.0)';
+            elements.updateStatusText.textContent = '✓ Versão mais recente (v1.0.2)';
             setTimeout(() => {
               if (elements.updateStatusText) elements.updateStatusText.textContent = '';
             }, 5000);
