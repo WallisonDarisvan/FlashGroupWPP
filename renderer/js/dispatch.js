@@ -55,7 +55,6 @@ FGW.setExecutionUIState = function(isRunning) {
   if (elements.btnAddVariation) elements.btnAddVariation.disabled = isRunning;
   if (elements.btnSelectAll) elements.btnSelectAll.disabled = isRunning;
   if (elements.btnClearSelection) elements.btnClearSelection.disabled = isRunning;
-  if (elements.btnSelectRandom20) elements.btnSelectRandom20.disabled = isRunning;
   if (elements.btnInsertGroupIdTag) elements.btnInsertGroupIdTag.disabled = isRunning;
   if (elements.btnManageVarsStep2) elements.btnManageVarsStep2.disabled = isRunning;
   if (elements.btnOpenVariablesManager) elements.btnOpenVariablesManager.disabled = isRunning;
@@ -165,8 +164,10 @@ FGW.handleStartDispatch = async function() {
     try {
       let result;
 
-      // Disparo com Mídia ou Texto Puro
-      if (chosenVariation.media && chosenVariation.media.dataUrl) {
+      // Disparo com Mídia ou Texto Puro (respeitando a chave individual de mídia)
+      const hasActiveMedia = Boolean(chosenVariation.media && chosenVariation.media.dataUrl && chosenVariation.mediaEnabled !== false);
+
+      if (hasActiveMedia) {
         FGW.log('INFO', `[${i + 1}/${dispatchQueue.length}] ${scopeTag} Enviando com mídia (${chosenVariation.media.fileName}) para ${groupIdentifierLabel}...`, 'info');
         result = await window.electronAPI.sendMediaMessage({
           instanceName,
@@ -179,7 +180,8 @@ FGW.handleStartDispatch = async function() {
           delay: presenceDelay
         });
       } else {
-        FGW.log('INFO', `[${i + 1}/${dispatchQueue.length}] ${scopeTag} Enviando mensagem de texto para ${groupIdentifierLabel}...`, 'info');
+        const sendNote = (chosenVariation.media && chosenVariation.mediaEnabled === false) ? ' [Mídia pausada: enviando apenas texto]' : '';
+        FGW.log('INFO', `[${i + 1}/${dispatchQueue.length}] ${scopeTag} Enviando mensagem de texto para ${groupIdentifierLabel}${sendNote}...`, 'info');
         result = await window.electronAPI.sendMessage({
           instanceName,
           number: currentGroup.id,
@@ -192,6 +194,28 @@ FGW.handleStartDispatch = async function() {
         state.stats.success++;
         FGW.updateGroupStatusInDOM(currentGroup.id, 'success');
         FGW.log('SUCESSO', `Mensagem enviada com sucesso para "${currentGroup.subject}".`, 'success');
+
+        // Registra e persiste a mensagem no histórico do chat do grupo
+        if (FGW.addRealChatMessage) {
+          let mediaIcon = '📷';
+          if (chosenVariation.media?.mediatype === 'audio') mediaIcon = '🎤';
+          else if (chosenVariation.media?.mediatype === 'video') mediaIcon = '🎥';
+          else if (chosenVariation.media?.mediatype === 'document') mediaIcon = '📄';
+
+          const sentText = (hasActiveMedia && chosenVariation.media && chosenVariation.media.fileName)
+            ? (processedText ? `${mediaIcon} ${chosenVariation.media.fileName}\n${processedText}` : `${mediaIcon} ${chosenVariation.media.fileName}`)
+            : processedText;
+
+          const realCampaignMsgId = result.data?.key?.id || ('campaign_' + Date.now() + '_' + Math.random().toString(36).substring(7));
+          FGW.addRealChatMessage(currentGroup.id, {
+            id: realCampaignMsgId,
+            fromMe: true,
+            pushName: 'Você (Disparo)',
+            text: sentText,
+            timestamp: Date.now(),
+            status: 'SENT'
+          });
+        }
       } else {
         state.stats.failed++;
         FGW.updateGroupStatusInDOM(currentGroup.id, 'error');

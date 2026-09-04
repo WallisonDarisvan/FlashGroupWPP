@@ -5,7 +5,10 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "dev": "electron ."
+    "dev": "electron .",
+    "dist": "electron-builder --win",
+    "build": "electron-builder --win nsis",
+    "build:win": "electron-builder --win nsis"
   },
   "keywords": [
     "electron",
@@ -14,13 +17,62 @@
     "automation",
     "broadcast"
   ],
-  "author": "",
+  "author": "FlashGroup WPP",
   "license": "MIT",
   "dependencies": {
     "axios": "^1.7.9",
-    "dotenv": "^17.4.2"
+    "dotenv": "^17.4.2",
+    "electron-updater": "^6.8.9"
   },
   "devDependencies": {
-    "electron": "^34.2.0"
+    "electron": "^34.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.flashgroupwpp.app",
+    "productName": "FlashGroup WPP",
+    "publish": {
+      "provider": "github",
+      "owner": "WallisonDarisvan",
+      "repo": "FlashGroupWPP"
+    },
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer/**/*",
+      "build/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": ".env",
+        "to": ".env"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "shortcutName": "FlashGroup WPP",
+      "uninstallDisplayName": "FlashGroup WPP",
+      "deleteAppDataOnUninstall": false
+    }
   }
 }

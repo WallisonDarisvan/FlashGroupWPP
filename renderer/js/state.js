@@ -7,8 +7,11 @@ window.FGW = window.FGW || {};
 
 FGW.state = {
   currentStep: 1, // Etapa ativa (1, 2, 3 ou 4)
+  connectionStatus: 'disconnected', // 'disconnected', 'loading' ou 'connected'
+  activeInstanceName: '', // Nome da instância conectada no momento
   groups: [], // Lista de grupos carregados da Evolution API
   selectedGroupIds: new Set(), // IDs dos grupos selecionados
+  groupsFilterMode: 'all', // 'all' ou 'selected'
   groupCustomTags: {}, // Mapeamento { [groupId]: 'Identificação personalizada' } ({ID do Grupo})
   customVariables: [], // Lista de variáveis: [{ name: 'Link', type: 'group'|'global', defaultValue: '' }]
   groupCustomVars: {}, // Mapeamento { [groupId]: { [varName]: 'valor' } }
@@ -76,13 +79,16 @@ FGW.initElements = function() {
     // Etapa 2: Grupos
     searchGroupInput: document.getElementById('searchGroupInput'),
     btnSelectAll: document.getElementById('btnSelectAll'),
-    btnSelectRandom20: document.getElementById('btnSelectRandom20'),
     btnClearSelection: document.getElementById('btnClearSelection'),
     btnReloadGroupsStep2: document.getElementById('btnReloadGroupsStep2'),
     btnManageVarsStep2: document.getElementById('btnManageVarsStep2'),
     masterCheckbox: document.getElementById('masterCheckbox'),
     selectionCounter: document.getElementById('selectionCounter'),
     totalGroupsCounter: document.getElementById('totalGroupsCounter'),
+    btnFilterAllGroups: document.getElementById('btnFilterAllGroups'),
+    btnFilterSelectedGroups: document.getElementById('btnFilterSelectedGroups'),
+    filterSelectedCount: document.getElementById('filterSelectedCount'),
+    chatTargetGroupSelect: document.getElementById('chatTargetGroupSelect'),
     groupsTable: document.getElementById('groupsTable'),
     groupsTableHeaderRow: document.querySelector('#groupsTable thead tr'),
     groupsTableBody: document.getElementById('groupsTableBody'),
@@ -101,20 +107,32 @@ FGW.initElements = function() {
     minDelay: document.getElementById('minDelay'),
     maxDelay: document.getElementById('maxDelay'),
     presenceDelay: document.getElementById('presenceDelay'),
-    btnOpenDelaysModal: document.getElementById('btnOpenDelaysModal'),
-    btnOpenDelaysModalSide: document.getElementById('btnOpenDelaysModalSide'),
-    delayBadgeVal: document.getElementById('delayBadgeVal'),
-    sideDelayPill: document.getElementById('sideDelayPill'),
-    delaysModal: document.getElementById('delaysModal'),
-    btnCloseDelaysModal: document.getElementById('btnCloseDelaysModal'),
-    btnSaveDelaysModal: document.getElementById('btnSaveDelaysModal'),
     btnResetDefaultDelays: document.getElementById('btnResetDefaultDelays'),
+
+    // Navbar & Configuração
+    btnOpenSettingsModal: document.getElementById('btnOpenSettingsModal'),
+    btnOpenVariablesManagerNav: document.getElementById('btnOpenVariablesManagerNav'),
+    settingsModal: document.getElementById('settingsModal'),
+    btnCloseSettingsModal: document.getElementById('btnCloseSettingsModal'),
+    btnSaveSettingsModal: document.getElementById('btnSaveSettingsModal'),
+    btnToggleTerminalDrawer: document.getElementById('btnToggleTerminalDrawer'),
+    terminalDrawer: document.getElementById('terminalDrawer'),
+    btnCloseTerminalDrawer: document.getElementById('btnCloseTerminalDrawer'),
+    terminalToggleText: document.getElementById('terminalToggleText'),
 
     // WhatsApp Mobile Preview
     previewVariationIndicator: document.getElementById('previewVariationIndicator'),
-    waPreviewTargetName: document.getElementById('waPreviewTargetName'),
+    // WhatsApp Chat Column & Live Real Chat
+    chatDisconnectedState: document.getElementById('chatDisconnectedState'),
+    chatConnectedState: document.getElementById('chatConnectedState'),
+    btnConnectFromChat: document.getElementById('btnConnectFromChat'),
+    btnRefreshRealChat: document.getElementById('btnRefreshRealChat'),
+    realChatMessagesList: document.getElementById('realChatMessagesList'),
+    waPlannedBubbleWrapper: document.getElementById('waPlannedBubbleWrapper'),
+    chatComposerInput: document.getElementById('chatComposerInput'),
+    btnSendRealChatMessage: document.getElementById('btnSendRealChatMessage'),
+    whatsappChatBody: document.getElementById('whatsappChatBody'),
     waPreviewTargetStatus: document.getElementById('waPreviewTargetStatus'),
-    waMessageBubble: document.getElementById('waMessageBubble'),
     waPreviewMediaContainer: document.getElementById('waPreviewMediaContainer'),
     waPreviewImage: document.getElementById('waPreviewImage'),
     waPreviewVideoBox: document.getElementById('waPreviewVideoBox'),
@@ -122,6 +140,9 @@ FGW.initElements = function() {
     waPreviewDocBox: document.getElementById('waPreviewDocBox'),
     waPreviewDocName: document.getElementById('waPreviewDocName'),
     waPreviewDocMeta: document.getElementById('waPreviewDocMeta'),
+    waPreviewAudioBox: document.getElementById('waPreviewAudioBox'),
+    waPreviewAudioName: document.getElementById('waPreviewAudioName'),
+    btnPreviewAudioPlay: document.getElementById('btnPreviewAudioPlay'),
     waPreviewText: document.getElementById('waPreviewText'),
     waMessageTime: document.getElementById('waMessageTime'),
     phoneStatusTime: document.getElementById('phoneStatusTime'),
@@ -154,7 +175,24 @@ FGW.initElements = function() {
     statFailed: document.getElementById('statFailed'),
     statRemaining: document.getElementById('statRemaining'),
     terminalLogs: document.getElementById('terminalLogs'),
-    btnClearLogs: document.getElementById('btnClearLogs')
+    btnClearLogs: document.getElementById('btnClearLogs'),
+
+    // Sub-rodapé & Auto-Update
+    linkFooterWhatsApp: document.getElementById('linkFooterWhatsApp'),
+    btnCheckUpdates: document.getElementById('btnCheckUpdates'),
+    updateBtnText: document.getElementById('updateBtnText'),
+    updateStatusText: document.getElementById('updateStatusText'),
+    updateNotificationModal: document.getElementById('updateNotificationModal'),
+    btnCloseUpdateModal: document.getElementById('btnCloseUpdateModal'),
+    btnDismissUpdate: document.getElementById('btnDismissUpdate'),
+    btnStartDownloadUpdate: document.getElementById('btnStartDownloadUpdate'),
+    btnRestartAndInstall: document.getElementById('btnRestartAndInstall'),
+    lblNewVersion: document.getElementById('lblNewVersion'),
+    updateReleaseNotesBox: document.getElementById('updateReleaseNotesBox'),
+    updateReleaseNotesContent: document.getElementById('updateReleaseNotesContent'),
+    updateDownloadProgressWrap: document.getElementById('updateDownloadProgressWrap'),
+    lblUpdatePercent: document.getElementById('lblUpdatePercent'),
+    updateProgressBarFill: document.getElementById('updateProgressBarFill')
   };
   return FGW.elements;
 };
@@ -173,3 +211,8 @@ FGW.escapeHtml = function(string) {
 FGW.escapeRegex = function(string) {
   return String(string).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 };
+
+FGW.sanitizeDomId = function(id) {
+  return String(id || '').replace(/[^a-zA-Z0-9_-]/g, '_');
+};
+

@@ -1,7 +1,23 @@
-require('dotenv').config();
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, shell } = require('electron');
+const { autoUpdater } = require('electron-updater');
 const path = require('path');
+const fs = require('fs');
 const axios = require('axios');
+
+// Garante carregamento do .env tanto em desenvolvimento quanto no app empacotado (.exe)
+const envCandidates = [
+  path.join(process.resourcesPath || '', '.env'),
+  path.join(__dirname, '.env'),
+  path.join(process.cwd(), '.env')
+];
+
+for (const candidate of envCandidates) {
+  if (candidate && fs.existsSync(candidate)) {
+    require('dotenv').config({ path: candidate });
+    break;
+  }
+}
+require('dotenv').config();
 
 let mainWindow = null;
 
@@ -9,10 +25,17 @@ let mainWindow = null;
 const EVOLUTION_API_URL = (process.env.EVOLUTION_API_URL || '').trim().replace(/\/+$/, '');
 const EVOLUTION_API_KEY = (process.env.EVOLUTION_API_KEY || '').trim();
 
+// Identificador da aplicação para a barra de tarefas do Windows
+if (process.platform === 'win32') {
+  app.setAppUserModelId('com.flashgroupwpp.app');
+}
+
 /**
  * Cria a janela principal da aplicação Electron
  */
 function createWindow() {
+  const iconPath = path.join(__dirname, 'build', 'icon.ico');
+
   mainWindow = new BrowserWindow({
     width: 1320,
     height: 880,
@@ -20,6 +43,7 @@ function createWindow() {
     minHeight: 720,
     backgroundColor: '#080c16',
     title: 'FlashGroup WPP - Disparo Automatizado para Grupos',
+    icon: fs.existsSync(iconPath) ? iconPath : undefined,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -33,6 +57,7 @@ function createWindow() {
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 
   mainWindow.once('ready-to-show', () => {
+    mainWindow.maximize();
     mainWindow.show();
   });
 
@@ -44,6 +69,7 @@ function createWindow() {
 // Inicialização do Electron
 app.whenReady().then(() => {
   setupIpcHandlers();
+  setupAutoUpdater();
   createWindow();
 
   app.on('activate', () => {
@@ -73,29 +99,51 @@ function validateCredentials() {
  */
 function setupIpcHandlers() {
   /**
-   * Handler: Checar Estado da Conexão da Instância
+   * Handler: Checar Estado da Conexão da Instância Específica
+   * Consulta na Evolution API estritamente a instância configurada para este aplicativo.
    */
-  ipcMain.handle('api:check-state', async (_event, { instanceName }) => {
+  ipcMain.handle('api:check-state', async (_event, { instanceName } = {}) => {
     try {
       validateCredentials();
-      if (!instanceName) {
-        return { success: false, error: 'Nome da instância não informado.' };
+
+      const trimmed = (instanceName || '').trim();
+      if (!trimmed) {
+        return { success: true, state: 'close', instanceName: '', message: 'Nenhuma instância configurada.' };
       }
 
-      const endpoint = `${EVOLUTION_API_URL}/instance/connectionState/${encodeURIComponent(instanceName.trim())}`;
-      const response = await axios.get(endpoint, {
-        headers: { apikey: EVOLUTION_API_KEY },
-        timeout: 10000
-      });
+      const endpoint = `${EVOLUTION_API_URL}/instance/connectionState/${encodeURIComponent(trimmed)}`;
+      try {
+        const response = await axios.get(endpoint, {
+          headers: { apikey: EVOLUTION_API_KEY },
+          timeout: 10000
+        });
 
-      const state = response.data?.instance?.state || response.data?.state || 'unknown';
-      return { success: true, state, data: response.data };
+        const state = response.data?.instance?.state || response.data?.state || 'close';
+        const isConnected = state === 'open';
+
+        console.log(`[api:check-state] Instância "${trimmed}": ${isConnected ? 'POSITIVA (open)' : 'NEGATIVA (' + state + ')'}`);
+        return {
+          success: true,
+          state: isConnected ? 'open' : 'close',
+          instanceName: trimmed,
+          data: response.data
+        };
+      } catch (err) {
+        // 404 (instância não existe ainda) ou qualquer erro de conexão = NEGATIVO (desconectado)
+        console.log(`[api:check-state] Instância "${trimmed}": NEGATIVA (não encontrada ou desconectada - ${err.message})`);
+        return {
+          success: true,
+          state: 'close',
+          instanceName: trimmed,
+          error: err.response?.data?.message || err.message
+        };
+      }
     } catch (error) {
-      const status = error.response?.status;
       return {
         success: false,
-        status,
-        error: error.response?.data?.message || error.message
+        state: 'close',
+        instanceName: instanceName || '',
+        error: error.message
       };
     }
   });
@@ -265,18 +313,34 @@ function setupIpcHandlers() {
   ipcMain.handle('api:fetch-groups', async (_event, { instanceName }) => {
     try {
       validateCredentials();
-      if (!instanceName) {
+      const trimmedName = (instanceName || '').trim();
+      if (!trimmedName) {
         return { success: false, error: 'Nome da instância não informado.' };
       }
 
-      const endpoint = `${EVOLUTION_API_URL}/group/fetchAllGroups/${encodeURIComponent(instanceName.trim())}?getParticipants=false`;
-      const response = await axios.get(endpoint, {
-        headers: {
-          apikey: EVOLUTION_API_KEY,
-          'Content-Type': 'application/json'
-        },
-        timeout: 35000
-      });
+      const endpoint = `${EVOLUTION_API_URL}/group/fetchAllGroups/${encodeURIComponent(trimmedName)}?getParticipants=false`;
+      
+      let response;
+      try {
+        response = await axios.get(endpoint, {
+          headers: {
+            apikey: EVOLUTION_API_KEY,
+            'Content-Type': 'application/json'
+          },
+          timeout: 75000
+        });
+      } catch (firstErr) {
+        // Se a instância acabou de se conectar, tenta fallback para /chat/findChats ou retry
+        console.warn(`[fetchAllGroups] Primeira tentativa para "${trimmedName}" falhou, tentando /chat/findChats...`, firstErr.message);
+        try {
+          response = await axios.get(`${EVOLUTION_API_URL}/chat/findChats/${encodeURIComponent(trimmedName)}`, {
+            headers: { apikey: EVOLUTION_API_KEY },
+            timeout: 60000
+          });
+        } catch (secondErr) {
+          throw firstErr;
+        }
+      }
 
       let groups = [];
       if (Array.isArray(response.data)) {
@@ -288,18 +352,24 @@ function setupIpcHandlers() {
       }
 
       const normalizedGroups = groups
-        .filter(item => item && (item.id || item.jid))
+        .filter(item => {
+          if (!item) return false;
+          const id = item.id || item.jid || item.remoteJid;
+          return id && (String(id).endsWith('@g.us') || Boolean(item.isGroup));
+        })
         .map(item => {
-          const id = item.id || item.jid;
-          const subject = item.subject || item.name || 'Grupo sem nome';
+          const id = item.id || item.jid || item.remoteJid;
+          const subject = item.subject || item.name || item.pushName || 'Grupo WhatsApp';
           return {
             id,
             subject,
+            pictureUrl: item.pictureUrl || item.profilePicUrl || item.imgUrl || null,
             participantsCount: item.size || item.participants?.length || null,
             status: 'pending'
           };
         });
 
+      console.log(`[api:fetch-groups] Retornados ${normalizedGroups.length} grupos da instância "${trimmedName}".`);
       return {
         success: true,
         data: normalizedGroups
@@ -327,7 +397,8 @@ function setupIpcHandlers() {
   ipcMain.handle('api:send-message', async (_event, { instanceName, number, text, delay }) => {
     try {
       validateCredentials();
-      if (!instanceName || !number || !text) {
+      const trimmedName = (instanceName || '').trim();
+      if (!trimmedName || !number || !text) {
         return { success: false, error: 'Parâmetros incompletos para envio.' };
       }
 
@@ -336,13 +407,14 @@ function setupIpcHandlers() {
         formattedNumber = `${formattedNumber}@g.us`;
       }
 
-      const endpoint = `${EVOLUTION_API_URL}/message/sendText/${encodeURIComponent(instanceName.trim())}`;
+      const endpoint = `${EVOLUTION_API_URL}/message/sendText/${encodeURIComponent(trimmedName)}`;
       const payload = {
         number: formattedNumber,
         text: text,
         delay: Number(delay) || 1200
       };
 
+      console.log(`[api:send-message] Enviando mensagem para ${formattedNumber} usando instância "${trimmedName}"...`);
       const response = await axios.post(endpoint, payload, {
         headers: {
           apikey: EVOLUTION_API_KEY,
@@ -351,6 +423,7 @@ function setupIpcHandlers() {
         timeout: 25000
       });
 
+      console.log(`[api:send-message] Sucesso no envio para ${formattedNumber}! ID: ${response.data?.key?.id || 'OK'}`);
       return {
         success: true,
         data: response.data
@@ -364,10 +437,147 @@ function setupIpcHandlers() {
         errorMsg = responseData.message || responseData.error || JSON.stringify(responseData);
       }
 
+      console.warn(`[api:send-message] Falha no envio para ${number}: ${errorMsg} (HTTP ${status})`);
       return {
         success: false,
         status,
         error: `Falha no envio para ${number}: ${errorMsg}`
+      };
+    }
+  });
+
+  /**
+   * Handler: Buscar Mensagens Reais de um Chat / Grupo
+   */
+  ipcMain.handle('api:fetch-messages', async (_event, { instanceName, remoteJid, limit = 30 }) => {
+    try {
+      validateCredentials();
+      const trimmedName = (instanceName || '').trim();
+      if (!trimmedName || !remoteJid) {
+        return { success: false, error: 'Parâmetros incompletos para buscar mensagens.' };
+      }
+
+      let formattedJid = String(remoteJid).trim();
+      if (!formattedJid.endsWith('@g.us') && !formattedJid.includes('@')) {
+        formattedJid = `${formattedJid}@g.us`;
+      }
+
+      const endpoint = `${EVOLUTION_API_URL}/chat/findMessages/${encodeURIComponent(trimmedName)}`;
+      let rawMessages = [];
+
+      try {
+        const response = await axios.post(
+          endpoint,
+          {
+            where: {
+              key: {
+                remoteJid: formattedJid
+              }
+            },
+            limit: Number(limit) || 30
+          },
+          {
+            headers: {
+              apikey: EVOLUTION_API_KEY,
+              'Content-Type': 'application/json'
+            },
+            timeout: 15000
+          }
+        );
+
+        if (Array.isArray(response.data)) {
+          rawMessages = response.data;
+        } else if (response.data?.messages?.records && Array.isArray(response.data.messages.records)) {
+          rawMessages = response.data.messages.records;
+        } else if (response.data && Array.isArray(response.data.messages)) {
+          rawMessages = response.data.messages;
+        } else if (response.data && Array.isArray(response.data.records)) {
+          rawMessages = response.data.records;
+        }
+      } catch (postErr) {
+        try {
+          const getRes = await axios.get(
+            `${endpoint}?remoteJid=${encodeURIComponent(formattedJid)}&limit=${Number(limit) || 30}`,
+            {
+              headers: { apikey: EVOLUTION_API_KEY },
+              timeout: 10000
+            }
+          );
+          if (Array.isArray(getRes.data)) {
+            rawMessages = getRes.data;
+          } else if (getRes.data?.messages?.records && Array.isArray(getRes.data.messages.records)) {
+            rawMessages = getRes.data.messages.records;
+          } else if (getRes.data && Array.isArray(getRes.data.messages)) {
+            rawMessages = getRes.data.messages;
+          } else if (getRes.data && Array.isArray(getRes.data.records)) {
+            rawMessages = getRes.data.records;
+          }
+        } catch (getErr) {
+          console.warn('[findMessages] Nenhuma mensagem anterior retornada pela Evolution API:', getErr.message);
+        }
+      }
+
+      // Normaliza as mensagens para a interface
+      const normalizedMessages = rawMessages
+        .map(msg => {
+          const key = msg.key || {};
+          const fromMe = Boolean(key.fromMe);
+          const pushName = msg.pushName || (fromMe ? 'Você' : 'Participante');
+          
+          let text = '';
+          let mediaType = null;
+          const m = msg.message || {};
+          if (m.conversation) {
+            text = m.conversation;
+          } else if (m.extendedTextMessage?.text) {
+            text = m.extendedTextMessage.text;
+          } else if (m.imageMessage) {
+            text = m.imageMessage.caption || '📷 Foto';
+            mediaType = 'image';
+          } else if (m.videoMessage) {
+            text = m.videoMessage.caption || '🎥 Vídeo';
+            mediaType = 'video';
+          } else if (m.documentMessage) {
+            text = `📄 ${m.documentMessage.title || m.documentMessage.fileName || 'Documento'}`;
+            mediaType = 'document';
+          } else if (m.audioMessage) {
+            text = '🎵 Mensagem de voz / Áudio';
+            mediaType = 'audio';
+          } else if (m.stickerMessage) {
+            text = '🏷️ Figurinha';
+            mediaType = 'sticker';
+          } else if (typeof msg.content === 'string') {
+            text = msg.content;
+          }
+
+          const rawTs = Number(msg.messageTimestamp);
+          const timestamp = (!isNaN(rawTs) && rawTs > 0)
+            ? (rawTs < 10000000000 ? rawTs * 1000 : rawTs)
+            : (msg.createdAt ? new Date(msg.createdAt).getTime() : Date.now());
+
+          return {
+            id: key.id || msg.id || Math.random().toString(36).substring(7),
+            fromMe,
+            pushName,
+            text,
+            mediaType,
+            timestamp,
+            status: msg.status || (fromMe ? 'SENT' : 'READ')
+          };
+        })
+        .filter(m => m.text && m.text.trim().length > 0)
+        .sort((a, b) => a.timestamp - b.timestamp);
+
+      return {
+        success: true,
+        data: normalizedMessages
+      };
+    } catch (error) {
+      console.warn('Erro ao buscar mensagens do chat:', error.message);
+      return {
+        success: true,
+        data: [],
+        warning: error.message
       };
     }
   });
@@ -378,7 +588,8 @@ function setupIpcHandlers() {
   ipcMain.handle('api:send-media', async (_event, { instanceName, number, media, mediatype, mimetype, fileName, caption, delay }) => {
     try {
       validateCredentials();
-      if (!instanceName || !number || !media) {
+      const trimmedName = (instanceName || '').trim();
+      if (!trimmedName || !number || !media) {
         return { success: false, error: 'Parâmetros incompletos para envio de mídia.' };
       }
 
@@ -387,17 +598,72 @@ function setupIpcHandlers() {
         formattedNumber = `${formattedNumber}@g.us`;
       }
 
-      const endpoint = `${EVOLUTION_API_URL}/message/sendMedia/${encodeURIComponent(instanceName.trim())}`;
+      const isAudio = mediatype === 'audio' ||
+        (mimetype && mimetype.startsWith('audio/')) ||
+        (fileName && /\.(mp3|wav|ogg|m4a|aac|opus|wma|amr)$/i.test(fileName));
+
+      // Limpa qualquer prefixo dataUrl (ex: data:image/jpeg;base64,) para entregar base64 puro exigido pela Evolution API
+      const base64Clean = String(media).replace(/^data:[^;]+;base64,/, '');
+
+      // Se for áudio, converte e envia no formato nativo de áudio gravado do WhatsApp (PTT)
+      if (isAudio) {
+        const audioEndpoint = `${EVOLUTION_API_URL}/message/sendWhatsAppAudio/${encodeURIComponent(trimmedName)}`;
+
+        const audioPayload = {
+          number: formattedNumber,
+          audio: base64Clean,
+          encoding: true, // Converte qualquer áudio (MP3, WAV, M4A, etc.) para o codec OGG Opus gravado na hora
+          delay: Number(delay) || 1200
+        };
+
+        console.log(`[api:send-media] Enviando áudio PTT para ${formattedNumber} na instância "${trimmedName}"...`);
+        const response = await axios.post(audioEndpoint, audioPayload, {
+          headers: {
+            apikey: EVOLUTION_API_KEY,
+            'Content-Type': 'application/json'
+          },
+          timeout: 45000
+        });
+
+        // Caso haja texto associado a este áudio na variação, envia como mensagem complementar
+        if (caption && caption.trim()) {
+          try {
+            await axios.post(`${EVOLUTION_API_URL}/message/sendText/${encodeURIComponent(trimmedName)}`, {
+              number: formattedNumber,
+              text: caption.trim(),
+              delay: 600
+            }, {
+              headers: {
+                apikey: EVOLUTION_API_KEY,
+                'Content-Type': 'application/json'
+              },
+              timeout: 25000
+            });
+          } catch (textErr) {
+            console.warn('Falha ao enviar texto complementar do áudio:', textErr.message);
+          }
+        }
+
+        console.log(`[api:send-media] Sucesso no envio de áudio PTT para ${formattedNumber}! ID: ${response.data?.key?.id || 'OK'}`);
+        return {
+          success: true,
+          data: response.data
+        };
+      }
+
+      // Envio padrão de Imagem, Vídeo ou Documento
+      const endpoint = `${EVOLUTION_API_URL}/message/sendMedia/${encodeURIComponent(trimmedName)}`;
       const payload = {
         number: formattedNumber,
         mediatype: mediatype || 'image',
         mimetype: mimetype || 'image/jpeg',
         caption: caption || '',
-        media: media,
+        media: base64Clean,
         fileName: fileName || 'arquivo',
         delay: Number(delay) || 1200
       };
 
+      console.log(`[api:send-media] Enviando ${mediatype || 'mídia'} para ${formattedNumber} na instância "${trimmedName}"...`);
       const response = await axios.post(endpoint, payload, {
         headers: {
           apikey: EVOLUTION_API_KEY,
@@ -406,6 +672,7 @@ function setupIpcHandlers() {
         timeout: 45000
       });
 
+      console.log(`[api:send-media] Sucesso no envio de mídia para ${formattedNumber}! ID: ${response.data?.key?.id || 'OK'}`);
       return {
         success: true,
         data: response.data
@@ -416,9 +683,10 @@ function setupIpcHandlers() {
       let errorMsg = error.message;
 
       if (responseData && typeof responseData === 'object') {
-        errorMsg = responseData.message || responseData.error || JSON.stringify(responseData);
+        errorMsg = responseData.message || responseData.error || (Array.isArray(responseData.response?.message) ? responseData.response.message.join(', ') : JSON.stringify(responseData));
       }
 
+      console.warn(`[api:send-media] Falha no envio para ${number}: ${errorMsg} (HTTP ${status})`);
       return {
         success: false,
         status,
@@ -426,4 +694,110 @@ function setupIpcHandlers() {
       };
     }
   });
+
+  /**
+   * Handler: Abrir URLs externas com segurança no navegador padrão do sistema
+   */
+  ipcMain.handle('app:open-external', async (_event, url) => {
+    try {
+      if (url && (url.startsWith('https://') || url.startsWith('http://'))) {
+        await shell.openExternal(url);
+        return { success: true };
+      }
+      return { success: false, error: 'URL inválida ou insegura.' };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
 }
+
+/**
+ * Configura o autoUpdater do GitHub Releases (electron-updater)
+ */
+function setupAutoUpdater() {
+  autoUpdater.autoDownload = false;
+  autoUpdater.autoInstallOnAppQuit = true;
+
+  function sendUpdateEvent(type, payload = {}) {
+    if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents) {
+      mainWindow.webContents.send('app:update-event', { type, ...payload });
+    }
+  }
+
+  autoUpdater.on('checking-for-update', () => {
+    sendUpdateEvent('checking');
+  });
+
+  autoUpdater.on('update-available', (info) => {
+    sendUpdateEvent('available', {
+      version: info?.version,
+      releaseNotes: info?.releaseNotes,
+      releaseDate: info?.releaseDate
+    });
+  });
+
+  autoUpdater.on('update-not-available', (info) => {
+    sendUpdateEvent('not-available', {
+      version: info?.version
+    });
+  });
+
+  autoUpdater.on('error', (err) => {
+    sendUpdateEvent('error', {
+      message: err == null ? 'Erro desconhecido ao verificar atualizações.' : (err.message || String(err))
+    });
+  });
+
+  autoUpdater.on('download-progress', (progressObj) => {
+    sendUpdateEvent('progress', {
+      percent: Math.round(progressObj.percent || 0),
+      transferred: progressObj.transferred,
+      total: progressObj.total,
+      bytesPerSecond: progressObj.bytesPerSecond
+    });
+  });
+
+  autoUpdater.on('update-downloaded', (info) => {
+    sendUpdateEvent('downloaded', {
+      version: info?.version
+    });
+  });
+
+  // Handler para checagem manual
+  ipcMain.handle('app:check-updates', async () => {
+    try {
+      const result = await autoUpdater.checkForUpdates();
+      return { success: true, updateInfo: result?.updateInfo };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  // Handler para iniciar download
+  ipcMain.handle('app:download-update', async () => {
+    try {
+      await autoUpdater.downloadUpdate();
+      return { success: true };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  // Handler para reiniciar e instalar
+  ipcMain.handle('app:quit-and-install', () => {
+    setImmediate(() => {
+      autoUpdater.quitAndInstall(false, true);
+    });
+    return { success: true };
+  });
+
+  // Checagem automática 6 segundos após o início quando empacotado em produção
+  if (app.isPackaged) {
+    setTimeout(() => {
+      autoUpdater.checkForUpdates().catch(err => {
+        console.warn('Verificação automática de atualização falhou:', err.message);
+      });
+    }, 6000);
+  }
+}
+

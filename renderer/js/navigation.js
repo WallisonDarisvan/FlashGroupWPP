@@ -1,61 +1,116 @@
 /**
- * FlashGroup WPP - Módulo: Navigation & Wizard (Stepper)
- * Controla a navegação entre as 4 etapas e a atualização do resumo da campanha.
+ * FlashGroup WPP - Módulo: Workspace Navigation, Modals & Terminal Drawer
+ * Gerencia a abertura/fechamento do Modal de Configuração, abas internas,
+ * gaveta retrátil de logs e atualização do resumo da campanha.
  */
 
 window.FGW = window.FGW || {};
 
-FGW.goToStep = function(stepNumber) {
-  const state = FGW.state;
-  state.currentStep = stepNumber;
-
-  // Atualiza exibição dos painéis
-  document.querySelectorAll('.step-panel').forEach(panel => {
-    panel.classList.remove('active');
-  });
-  const targetPanel = document.getElementById(`panelStep${stepNumber}`);
-  if (targetPanel) targetPanel.classList.add('active');
-
-  // Atualiza as abas de navegação do topo
-  document.querySelectorAll('.step-tab').forEach(tab => {
-    const stepVal = parseInt(tab.dataset.step, 10);
-    tab.classList.remove('active');
-    if (stepVal === stepNumber) {
-      tab.classList.add('active');
+/**
+ * Abre o Modal de Configuração unificado (WhatsApp + Delays)
+ * @param {string} [tabId='tabWhatsApp'] - Aba inicial a ser exibida
+ */
+FGW.openSettingsModal = function(tabId) {
+  const elements = FGW.elements || {};
+  if (elements.settingsModal) {
+    elements.settingsModal.classList.remove('hidden');
+    if (tabId) {
+      FGW.switchSettingsTab(tabId);
     }
-    if (stepVal < stepNumber) {
-      tab.classList.add('completed');
-    } else {
-      tab.classList.remove('completed');
-    }
-  });
-
-  // Ações contextuais de cada etapa
-  if (stepNumber === 2) {
-    // Se a tabela estiver vazia, carrega grupos automaticamente
-    if (state.groups.length === 0 && FGW.handleConnectAndFetchGroups) {
-      FGW.handleConnectAndFetchGroups();
-    }
-  } else if (stepNumber === 3) {
-    if (FGW.updateVariationScopeSelectorOptions) {
-      FGW.updateVariationScopeSelectorOptions();
-    }
-    if (FGW.updateWhatsAppMobilePreview) {
-      FGW.updateWhatsAppMobilePreview();
-    }
-  } else if (stepNumber === 4) {
-    FGW.updateCampaignSummary();
   }
-
-  // Rola para o topo suavemente
-  const wizardContainer = document.querySelector('.wizard-container');
-  if (wizardContainer) wizardContainer.scrollTo({ top: 0, behavior: 'smooth' });
 };
 
+/**
+ * Fecha o Modal de Configuração e persiste quaisquer alterações
+ */
+FGW.closeSettingsModal = function() {
+  const elements = FGW.elements || {};
+  if (elements.settingsModal) {
+    elements.settingsModal.classList.add('hidden');
+    if (FGW.saveSettings) FGW.saveSettings();
+    if (FGW.updateCampaignSummary) FGW.updateCampaignSummary();
+  }
+};
+
+/**
+ * Alterna entre as abas internas do modal de configuração
+ * @param {string} targetTabId - 'tabWhatsApp' ou 'tabDelays'
+ */
+FGW.switchSettingsTab = function(targetTabId) {
+  const modal = FGW.elements?.settingsModal || document.getElementById('settingsModal');
+  if (!modal) return;
+
+  // Atualiza botões das abas
+  modal.querySelectorAll('.settings-tab-btn').forEach(btn => {
+    if (btn.dataset.tab === targetTabId) {
+      btn.classList.add('active');
+    } else {
+      btn.classList.remove('active');
+    }
+  });
+
+  // Atualiza painéis de conteúdo
+  modal.querySelectorAll('.settings-tab-pane').forEach(pane => {
+    if (pane.id === targetTabId) {
+      pane.classList.add('active');
+    } else {
+      pane.classList.remove('active');
+    }
+  });
+};
+
+/**
+ * Alterna a visualização da gaveta retrátil de logs
+ */
+FGW.toggleTerminalDrawer = function() {
+  const elements = FGW.elements || {};
+  if (!elements.terminalDrawer) return;
+
+  const isHidden = elements.terminalDrawer.classList.contains('hidden');
+  if (isHidden) {
+    elements.terminalDrawer.classList.remove('hidden');
+    if (elements.terminalToggleText) elements.terminalToggleText.textContent = 'Ocultar Terminal';
+    // Rola os logs para o final
+    if (elements.terminalLogs) {
+      elements.terminalLogs.scrollTop = elements.terminalLogs.scrollHeight;
+    }
+  } else {
+    elements.terminalDrawer.classList.add('hidden');
+    if (elements.terminalToggleText) elements.terminalToggleText.textContent = 'Terminal de Logs';
+  }
+};
+
+/**
+ * Fecha a gaveta retrátil de logs
+ */
+FGW.closeTerminalDrawer = function() {
+  const elements = FGW.elements || {};
+  if (elements.terminalDrawer) {
+    elements.terminalDrawer.classList.add('hidden');
+    if (elements.terminalToggleText) elements.terminalToggleText.textContent = 'Terminal de Logs';
+  }
+};
+
+/**
+ * Restaura os padrões de delays
+ */
+FGW.resetDefaultDelays = function() {
+  const elements = FGW.elements || {};
+  if (elements.minDelay) elements.minDelay.value = 20;
+  if (elements.maxDelay) elements.maxDelay.value = 50;
+  if (elements.presenceDelay) elements.presenceDelay.value = 1200;
+  if (FGW.saveSettings) FGW.saveSettings();
+  if (FGW.updateCampaignSummary) FGW.updateCampaignSummary();
+  if (FGW.log) FGW.log('SISTEMA', 'Delays restaurados para o padrão (20s - 50s, 1200ms).', 'info');
+};
+
+/**
+ * Atualiza o resumo da campanha e contadores em tempo real na barra inferior
+ */
 FGW.updateCampaignSummary = function() {
   const state = FGW.state;
   const elements = FGW.elements || {};
-  const selectedCount = state.selectedGroupIds.size;
+  const selectedCount = state.selectedGroupIds ? state.selectedGroupIds.size : 0;
   const validVariations = FGW.getValidVariations ? FGW.getValidVariations().length : 0;
   const minDelay = elements.minDelay ? elements.minDelay.value : 20;
   const maxDelay = elements.maxDelay ? elements.maxDelay.value : 50;
@@ -66,52 +121,22 @@ FGW.updateCampaignSummary = function() {
   if (elements.summaryConnectionVal) {
     elements.summaryConnectionVal.textContent = (elements.connectionStatusText && elements.connectionStatusText.textContent) || 'Desconectado';
   }
-
-  FGW.updateDelayBadges();
 };
 
-FGW.updateDelayBadges = function() {
-  const elements = FGW.elements || {};
-  const min = elements.minDelay ? elements.minDelay.value : 20;
-  const max = elements.maxDelay ? elements.maxDelay.value : 50;
-  const text = `${min}s - ${max}s`;
-  if (elements.delayBadgeVal) elements.delayBadgeVal.textContent = text;
-  if (elements.sideDelayPill) elements.sideDelayPill.textContent = text;
-};
-
-FGW.openDelaysModal = function() {
-  const elements = FGW.elements || {};
-  if (elements.delaysModal) {
-    elements.delaysModal.classList.remove('hidden');
-    FGW.updateDelayBadges();
+/**
+ * Função de retrocompatibilidade (para componentes legados)
+ */
+FGW.goToStep = function(stepNumber) {
+  if (stepNumber === 1) {
+    FGW.openSettingsModal('tabWhatsApp');
   }
 };
 
-FGW.closeDelaysModal = function() {
-  const elements = FGW.elements || {};
-  if (elements.delaysModal) {
-    elements.delaysModal.classList.add('hidden');
-    if (FGW.saveSettings) FGW.saveSettings();
-    FGW.updateDelayBadges();
-    if (FGW.updateCampaignSummary) FGW.updateCampaignSummary();
-  }
-};
-
-FGW.resetDefaultDelays = function() {
-  const elements = FGW.elements || {};
-  if (elements.minDelay) elements.minDelay.value = 20;
-  if (elements.maxDelay) elements.maxDelay.value = 50;
-  if (elements.presenceDelay) elements.presenceDelay.value = 1200;
-  if (FGW.saveSettings) FGW.saveSettings();
-  FGW.updateDelayBadges();
-  if (FGW.updateCampaignSummary) FGW.updateCampaignSummary();
-  if (FGW.log) FGW.log('SISTEMA', 'Delays restaurados para o padrão (20s - 50s, 1200ms).', 'info');
-};
-
-window.goToStep = FGW.goToStep;
-window.updateCampaignSummary = FGW.updateCampaignSummary;
-window.openDelaysModal = FGW.openDelaysModal;
-window.closeDelaysModal = FGW.closeDelaysModal;
+window.openSettingsModal = FGW.openSettingsModal;
+window.closeSettingsModal = FGW.closeSettingsModal;
+window.switchSettingsTab = FGW.switchSettingsTab;
+window.toggleTerminalDrawer = FGW.toggleTerminalDrawer;
+window.closeTerminalDrawer = FGW.closeTerminalDrawer;
 window.resetDefaultDelays = FGW.resetDefaultDelays;
-window.updateDelayBadges = FGW.updateDelayBadges;
-
+window.updateCampaignSummary = FGW.updateCampaignSummary;
+window.goToStep = FGW.goToStep;

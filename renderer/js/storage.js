@@ -16,7 +16,8 @@ FGW.STORAGE_KEYS = {
   GROUP_CUSTOM_VARS: 'fgw_group_custom_vars',
   CACHED_GROUPS: 'fgw_cached_groups',
   SELECTED_GROUP_IDS: 'fgw_selected_group_ids',
-  GROUP_CUSTOM_VARIATIONS: 'fgw_group_custom_variations'
+  GROUP_CUSTOM_VARIATIONS: 'fgw_group_custom_variations',
+  REAL_MESSAGES: 'fgw_real_chat_messages'
 };
 
 FGW.setDefaultVariations = function() {
@@ -25,6 +26,78 @@ FGW.setDefaultVariations = function() {
     { text: 'Opa membros do {ID do Grupo}, tudo bem? Vejam só essa oportunidade!', media: null },
     { text: 'Atenção {ID do Grupo}: recado importante e exclusivo para vocês hoje.', media: null }
   ];
+};
+
+/**
+ * IndexedDB para persistência segura e isolada da instância por aplicativo
+ */
+FGW.initIndexedDB = function() {
+  return new Promise((resolve) => {
+    try {
+      const request = indexedDB.open('FlashGroupWPP_InstanceDB', 1);
+      request.onupgradeneeded = (e) => {
+        const db = e.target.result;
+        if (!db.objectStoreNames.contains('app_instance')) {
+          db.createObjectStore('app_instance', { keyPath: 'key' });
+        }
+      };
+      request.onsuccess = (e) => {
+        FGW.db = e.target.result;
+        resolve(FGW.db);
+      };
+      request.onerror = (e) => {
+        console.warn('[IndexedDB] Falha ao abrir banco:', e.target.error);
+        resolve(null);
+      };
+    } catch (err) {
+      console.warn('[IndexedDB] Exceção:', err);
+      resolve(null);
+    }
+  });
+};
+
+FGW.saveInstanceNameToIndexedDB = async function(instanceName) {
+  const name = (instanceName || '').trim();
+  if (!name) return;
+  localStorage.setItem(FGW.STORAGE_KEYS.INSTANCE_NAME, name);
+  try {
+    if (!FGW.db) await FGW.initIndexedDB();
+    if (!FGW.db) return;
+    return new Promise((resolve) => {
+      const tx = FGW.db.transaction('app_instance', 'readwrite');
+      const store = tx.objectStore('app_instance');
+      store.put({ key: 'instanceName', value: name, updatedAt: Date.now() });
+      tx.oncomplete = () => resolve(true);
+      tx.onerror = () => resolve(false);
+    });
+  } catch (err) {
+    console.warn('[IndexedDB] Erro ao salvar:', err);
+  }
+};
+
+FGW.loadInstanceNameFromIndexedDB = async function() {
+  try {
+    if (!FGW.db) await FGW.initIndexedDB();
+    if (FGW.db) {
+      const dbValue = await new Promise((resolve) => {
+        const tx = FGW.db.transaction('app_instance', 'readonly');
+        const store = tx.objectStore('app_instance');
+        const req = store.get('instanceName');
+        req.onsuccess = () => {
+          if (req.result && req.result.value) {
+            resolve(req.result.value);
+          } else {
+            resolve(null);
+          }
+        };
+        req.onerror = () => resolve(null);
+      });
+      if (dbValue) return dbValue;
+    }
+  } catch (err) {
+    console.warn('[IndexedDB] Erro ao carregar:', err);
+  }
+  return localStorage.getItem(FGW.STORAGE_KEYS.INSTANCE_NAME) || '';
 };
 
 FGW.loadSavedSettings = function() {
@@ -89,10 +162,14 @@ FGW.loadSavedSettings = function() {
   try {
     const savedSelected = localStorage.getItem(KEYS.SELECTED_GROUP_IDS);
     if (savedSelected) {
-      const parsedSelected = JSON.parse(savedSelected);
-      if (Array.isArray(parsedSelected)) {
-        state.selectedGroupIds = new Set(parsedSelected);
+      const parsed = JSON.parse(savedSelected);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        state.selectedGroupIds = new Set(parsed);
+      } else {
+        state.selectedGroupIds = new Set();
       }
+    } else {
+      state.selectedGroupIds = new Set();
     }
   } catch (e) {
     state.selectedGroupIds = new Set();
@@ -114,11 +191,12 @@ FGW.loadSavedSettings = function() {
       if (Array.isArray(parsed) && parsed.length > 0) {
         state.messageVariations = parsed.map(item => {
           if (typeof item === 'string') {
-            return { text: item, media: null };
+            return { text: item, media: null, mediaEnabled: true };
           }
           return {
             text: item?.text || '',
-            media: item?.media || null
+            media: item?.media || null,
+            mediaEnabled: item?.mediaEnabled !== false
           };
         });
       } else {
@@ -130,12 +208,30 @@ FGW.loadSavedSettings = function() {
   } catch (e) {
     FGW.setDefaultVariations();
   }
+
+  // Carrega histórico de mensagens reais do chat
+  try {
+    const savedMessages = localStorage.getItem(KEYS.REAL_MESSAGES);
+    if (savedMessages) {
+      FGW.state.realMessages = JSON.parse(savedMessages) || {};
+    } else {
+      FGW.state.realMessages = FGW.state.realMessages || {};
+    }
+  } catch (e) {
+    FGW.state.realMessages = FGW.state.realMessages || {};
+  }
 };
 
 FGW.saveSettings = function() {
   const elements = FGW.elements || {};
   const KEYS = FGW.STORAGE_KEYS;
-  if (elements.instanceName) localStorage.setItem(KEYS.INSTANCE_NAME, elements.instanceName.value.trim());
+  if (elements.instanceName) {
+    const val = elements.instanceName.value.trim();
+    localStorage.setItem(KEYS.INSTANCE_NAME, val);
+    if (val && FGW.saveInstanceNameToIndexedDB) {
+      FGW.saveInstanceNameToIndexedDB(val);
+    }
+  }
   if (elements.minDelay) localStorage.setItem(KEYS.MIN_DELAY, elements.minDelay.value);
   if (elements.maxDelay) localStorage.setItem(KEYS.MAX_DELAY, elements.maxDelay.value);
   if (elements.presenceDelay) localStorage.setItem(KEYS.PRESENCE_DELAY, elements.presenceDelay.value);
@@ -166,3 +262,26 @@ FGW.saveCachedGroups = function() {
 FGW.saveGroupCustomVariations = function() {
   localStorage.setItem(FGW.STORAGE_KEYS.GROUP_CUSTOM_VARIATIONS, JSON.stringify(FGW.state.groupCustomVariations));
 };
+
+/**
+ * Salva o histórico de mensagens reais por grupo no localStorage
+ */
+FGW.saveRealMessages = function() {
+  const KEYS = FGW.STORAGE_KEYS;
+  try {
+    const dataToSave = {};
+    const messagesByGroup = FGW.state.realMessages || {};
+    // Salva as últimas 100 mensagens por grupo
+    for (const [gid, msgs] of Object.entries(messagesByGroup)) {
+      if (Array.isArray(msgs) && msgs.length > 0) {
+        dataToSave[gid] = msgs.slice(-100);
+      }
+    }
+    localStorage.setItem(KEYS.REAL_MESSAGES, JSON.stringify(dataToSave));
+  } catch (e) {
+    console.warn('Erro ao salvar mensagens do chat no storage:', e);
+  }
+};
+
+window.saveRealMessages = FGW.saveRealMessages;
+

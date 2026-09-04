@@ -128,8 +128,8 @@ FGW.getVariationsForGroup = function(group) {
     const valid = customConfig.variations.filter(v => {
       if (!v) return false;
       const hasText = (v.text || '').trim().length > 0;
-      const hasMedia = !!(v.media && v.media.dataUrl);
-      return hasText || hasMedia;
+      const hasActiveMedia = !!(v.media && v.media.dataUrl && v.mediaEnabled !== false);
+      return hasText || hasActiveMedia;
     });
     if (valid.length > 0) {
       return { isCustom: true, variations: valid };
@@ -165,9 +165,81 @@ FGW.formatWhatsAppPreviewText = function(rawText) {
   return text;
 };
 
+FGW._previewAudioPlayer = null;
+
+FGW.setPreviewAudioPlayingState = function(isPlaying) {
+  const elements = FGW.elements || {};
+  const btn = elements.btnPreviewAudioPlay;
+  const box = elements.waPreviewAudioBox;
+  if (!btn) return;
+
+  if (isPlaying) {
+    btn.classList.add('is-playing');
+    if (box) box.classList.add('is-playing');
+    btn.title = 'Pausar reprodução de áudio';
+    btn.innerHTML = `
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+        <rect x="6" y="4" width="4" height="16" rx="1"/>
+        <rect x="14" y="4" width="4" height="16" rx="1"/>
+      </svg>
+    `;
+  } else {
+    btn.classList.remove('is-playing');
+    if (box) box.classList.remove('is-playing');
+    btn.title = 'Reproduzir áudio gravado';
+    btn.innerHTML = `
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+        <polygon points="5 3 19 12 5 21 5 3"/>
+      </svg>
+    `;
+  }
+};
+
+FGW.togglePreviewAudioPlayback = function() {
+  const activeList = FGW.getCurrentActiveVariationsList();
+  const current = activeList[FGW.state.previewVariationIndex];
+  if (!current || !current.media || current.media.mediatype !== 'audio' || !current.media.dataUrl) {
+    return;
+  }
+
+  // Se já estiver tocando, pausa
+  if (FGW._previewAudioPlayer && !FGW._previewAudioPlayer.paused) {
+    FGW._previewAudioPlayer.pause();
+    FGW.setPreviewAudioPlayingState(false);
+    return;
+  }
+
+  try {
+    if (!FGW._previewAudioPlayer || FGW._previewAudioPlayer.src !== current.media.dataUrl) {
+      if (FGW._previewAudioPlayer) {
+        FGW._previewAudioPlayer.pause();
+      }
+      FGW._previewAudioPlayer = new Audio(current.media.dataUrl);
+      FGW._previewAudioPlayer.onended = () => FGW.setPreviewAudioPlayingState(false);
+      FGW._previewAudioPlayer.onerror = () => FGW.setPreviewAudioPlayingState(false);
+    }
+
+    FGW._previewAudioPlayer.play()
+      .then(() => FGW.setPreviewAudioPlayingState(true))
+      .catch(err => {
+        console.warn('Falha ao reproduzir áudio de preview:', err);
+        FGW.setPreviewAudioPlayingState(false);
+      });
+  } catch (err) {
+    console.warn('Exceção ao inicializar áudio:', err);
+    FGW.setPreviewAudioPlayingState(false);
+  }
+};
+
 FGW.updateWhatsAppMobilePreview = function() {
   const elements = FGW.elements || {};
   const activeList = FGW.getCurrentActiveVariationsList();
+
+  // Pausa player de áudio anterior se estiver tocando
+  if (FGW._previewAudioPlayer && !FGW._previewAudioPlayer.paused) {
+    FGW._previewAudioPlayer.pause();
+    FGW.setPreviewAudioPlayingState(false);
+  }
 
   // Relógio do Celular e da Mensagem
   const now = new Date();
@@ -175,28 +247,38 @@ FGW.updateWhatsAppMobilePreview = function() {
   if (elements.phoneStatusTime) elements.phoneStatusTime.textContent = timeStr;
   if (elements.waMessageTime) elements.waMessageTime.textContent = timeStr;
 
-  // Informações do Contato / Grupo no Header do WhatsApp
-  if (elements.waPreviewTargetName) {
-    if (FGW.state.activeMessageScope !== '__global__') {
-      const grp = FGW.state.groups.find(g => g.id === FGW.state.activeMessageScope);
-      elements.waPreviewTargetName.textContent = grp ? grp.subject : 'Grupo Selecionado';
-      if (elements.waPreviewTargetStatus) {
-        elements.waPreviewTargetStatus.textContent = grp?.participantsCount 
-          ? `${grp.participantsCount} membros • online` 
-          : 'online • toque para dados';
-      }
+  // Grupo em foco no Chat Central
+  const selectedChatGroupId = FGW.state.currentChatGroupId
+    || (elements.chatTargetGroupSelect && elements.chatTargetGroupSelect.value !== '__preview_default__' ? elements.chatTargetGroupSelect.value : null);
+  const targetGroup = (selectedChatGroupId && selectedChatGroupId !== '__preview_default__')
+    ? (FGW.state.groups || []).find(g => g.id === selectedChatGroupId)
+    : null;
+
+  if (elements.waPreviewTargetStatus) {
+    if (targetGroup) {
+      const count = targetGroup.participantsCount !== null ? `${targetGroup.participantsCount} membros • ` : '';
+      elements.waPreviewTargetStatus.textContent = `${count}online`;
     } else {
-      elements.waPreviewTargetName.textContent = 'Grupo WhatsApp (Padrão)';
-      if (elements.waPreviewTargetStatus) {
-        elements.waPreviewTargetStatus.textContent = 'online • toque para dados';
-      }
+      elements.waPreviewTargetStatus.textContent = 'online • modelo geral para os grupos selecionados';
+    }
+  }
+
+  // Atualiza a foto do avatar no cabeçalho do chat
+  const chatAvatar = document.getElementById('chatHeaderAvatar');
+  if (chatAvatar) {
+    if (targetGroup && targetGroup.pictureUrl) {
+      chatAvatar.innerHTML = `<img src="${FGW.escapeHtml(targetGroup.pictureUrl)}" alt="" onerror="this.outerHTML='<svg viewBox=\\'0 0 24 24\\' width=\\'20\\' height=\\'20\\' fill=\\'currentColor\\'><path d=\\'M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z\\'/></svg>';">`;
+    } else {
+      chatAvatar.innerHTML = `<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+        <path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/>
+      </svg>`;
     }
   }
 
   // Se a lista estiver vazia
   if (!activeList || activeList.length === 0) {
     if (elements.previewVariationIndicator) elements.previewVariationIndicator.textContent = 'Sem variações';
-    if (elements.waPreviewText) elements.waPreviewText.innerHTML = '<em>Nenhuma variação disponível neste escopo.</em>';
+    if (elements.waPreviewText) elements.waPreviewText.innerHTML = '<em>Nenhuma variação cadastrada neste escopo.</em>';
     if (elements.waPreviewMediaContainer) elements.waPreviewMediaContainer.classList.add('hidden');
     return;
   }
@@ -211,14 +293,18 @@ FGW.updateWhatsAppMobilePreview = function() {
   const curIdx = FGW.state.previewVariationIndex;
   const item = activeList[curIdx] || { text: '', media: null };
 
-  // Atualiza Badge do Topo do Mockup
+  // Atualiza Badge do Topo do Chat
   if (elements.previewVariationIndicator) {
     elements.previewVariationIndicator.textContent = `Variação #${curIdx + 1}`;
   }
 
-  // Atualiza Texto da Mensagem com formatação e emojis
+  // Atualiza Texto da Mensagem: se houver grupo em foco, resolve variáveis dinâmicas!
   if (elements.waPreviewText) {
-    elements.waPreviewText.innerHTML = FGW.formatWhatsAppPreviewText(item.text);
+    let displayText = item.text || '';
+    if (targetGroup && FGW.applyDynamicTags) {
+      displayText = FGW.applyDynamicTags(displayText, targetGroup);
+    }
+    elements.waPreviewText.innerHTML = FGW.formatWhatsAppPreviewText(displayText);
   }
 
   // Atualiza Mídia Anexa
@@ -233,6 +319,7 @@ FGW.updateWhatsAppMobilePreview = function() {
         }
         if (elements.waPreviewVideoBox) elements.waPreviewVideoBox.classList.add('hidden');
         if (elements.waPreviewDocBox) elements.waPreviewDocBox.classList.add('hidden');
+        if (elements.waPreviewAudioBox) elements.waPreviewAudioBox.classList.add('hidden');
       } else if (item.media.mediatype === 'video') {
         if (elements.waPreviewImage) elements.waPreviewImage.classList.add('hidden');
         if (elements.waPreviewVideoBox) {
@@ -240,10 +327,20 @@ FGW.updateWhatsAppMobilePreview = function() {
           if (elements.waPreviewVideoName) elements.waPreviewVideoName.textContent = item.media.fileName || 'video.mp4';
         }
         if (elements.waPreviewDocBox) elements.waPreviewDocBox.classList.add('hidden');
-      } else {
-        // Documento PDF ou áudio
+        if (elements.waPreviewAudioBox) elements.waPreviewAudioBox.classList.add('hidden');
+      } else if (item.media.mediatype === 'audio') {
         if (elements.waPreviewImage) elements.waPreviewImage.classList.add('hidden');
         if (elements.waPreviewVideoBox) elements.waPreviewVideoBox.classList.add('hidden');
+        if (elements.waPreviewDocBox) elements.waPreviewDocBox.classList.add('hidden');
+        if (elements.waPreviewAudioBox) {
+          elements.waPreviewAudioBox.classList.remove('hidden');
+          if (elements.waPreviewAudioName) elements.waPreviewAudioName.textContent = item.media.fileName || 'audio.mp3';
+        }
+      } else {
+        // Documento PDF
+        if (elements.waPreviewImage) elements.waPreviewImage.classList.add('hidden');
+        if (elements.waPreviewVideoBox) elements.waPreviewVideoBox.classList.add('hidden');
+        if (elements.waPreviewAudioBox) elements.waPreviewAudioBox.classList.add('hidden');
         if (elements.waPreviewDocBox) {
           elements.waPreviewDocBox.classList.remove('hidden');
           if (elements.waPreviewDocName) elements.waPreviewDocName.textContent = item.media.fileName || 'documento.pdf';
@@ -257,6 +354,7 @@ FGW.updateWhatsAppMobilePreview = function() {
       if (elements.waPreviewImage) elements.waPreviewImage.classList.add('hidden');
       if (elements.waPreviewVideoBox) elements.waPreviewVideoBox.classList.add('hidden');
       if (elements.waPreviewDocBox) elements.waPreviewDocBox.classList.add('hidden');
+      if (elements.waPreviewAudioBox) elements.waPreviewAudioBox.classList.add('hidden');
     }
   }
 
@@ -264,8 +362,9 @@ FGW.updateWhatsAppMobilePreview = function() {
   if (elements.variationsList) {
     elements.variationsList.querySelectorAll('.variation-item').forEach((card, i) => {
       if (i === curIdx) {
-        card.classList.add('is-active-preview');
-        // Adiciona badge se ainda não tiver
+        if (!card.classList.contains('is-active-preview')) {
+          card.classList.add('is-active-preview');
+        }
         const headerLeft = card.querySelector('.variation-header-left');
         if (headerLeft && !headerLeft.querySelector('.badge-previewing')) {
           const b = document.createElement('span');
@@ -274,7 +373,9 @@ FGW.updateWhatsAppMobilePreview = function() {
           headerLeft.appendChild(b);
         }
       } else {
-        card.classList.remove('is-active-preview');
+        if (card.classList.contains('is-active-preview')) {
+          card.classList.remove('is-active-preview');
+        }
         const b = card.querySelector('.badge-previewing');
         if (b) b.remove();
       }
@@ -312,6 +413,7 @@ FGW.renderVariations = function() {
   activeList.forEach((item, index) => {
     const textValue = item?.text || '';
     const hasMedia = !!(item?.media && item.media.dataUrl);
+    const isMediaEnabled = item?.mediaEnabled !== false;
     const isCurrentlyPreviewed = (index === FGW.state.previewVariationIndex);
 
     const card = document.createElement('div');
@@ -322,7 +424,11 @@ FGW.renderVariations = function() {
     let mediaBadgeHtml = '';
     if (hasMedia) {
       const typeLabel = (item.media.mediatype || 'mídia').toUpperCase();
-      mediaBadgeHtml = `<span class="badge-var-media">${FGW.escapeHtml(typeLabel)}</span>`;
+      if (isMediaEnabled) {
+        mediaBadgeHtml = `<span class="badge-var-media active" title="Mídia ativada: será enviada no disparo">📷 ${FGW.escapeHtml(typeLabel)}</span>`;
+      } else {
+        mediaBadgeHtml = `<span class="badge-var-media paused" title="Mídia desligada: será enviado apenas o texto">⏸️ ${FGW.escapeHtml(typeLabel)} (DESLIGADA)</span>`;
+      }
     }
 
     const previewBadgeHtml = isCurrentlyPreviewed
@@ -336,28 +442,48 @@ FGW.renderVariations = function() {
     let mediaPreviewHtml = '';
     if (hasMedia) {
       const m = item.media;
-      const thumbContent = m.mediatype === 'image'
-        ? `<img src="${m.dataUrl}" alt="Preview">`
-        : `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+      let thumbContent = '';
+      let typeLabel = (m.mediatype || '').toUpperCase();
+
+      if (m.mediatype === 'image') {
+        thumbContent = `<img src="${m.dataUrl}" alt="Preview">`;
+      } else if (m.mediatype === 'audio') {
+        thumbContent = `<div class="var-audio-mic-thumb" title="Áudio Gravado na Hora (PTT)"><svg viewBox="0 0 24 24" width="18" height="18" fill="#25d366"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/><path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/></svg></div>`;
+        typeLabel = '🎤 ÁUDIO GRAVADO (PTT)';
+      } else if (m.mediatype === 'video') {
+        thumbContent = `<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>`;
+      } else {
+        thumbContent = `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
              <polyline points="14 2 14 8 20 8"/>
            </svg>`;
+      }
 
       mediaPreviewHtml = `
-        <div class="variation-media-preview">
+        <div class="variation-media-preview ${isMediaEnabled ? '' : 'is-paused'}">
           <div class="var-media-left">
             <div class="var-media-thumb">${thumbContent}</div>
             <div class="var-media-details">
-              <span class="var-media-name" title="${FGW.escapeHtml(m.fileName)}">${FGW.escapeHtml(m.fileName)}</span>
-              <span class="var-media-size">${FGW.escapeHtml(m.fileSizeStr || '')} • ${(m.mediatype || '').toUpperCase()}</span>
+              <div class="var-media-name-row">
+                <span class="var-media-name" title="${FGW.escapeHtml(m.fileName)}">${FGW.escapeHtml(m.fileName)}</span>
+                ${!isMediaEnabled ? '<span class="badge-paused-tag">Apenas Texto</span>' : ''}
+              </div>
+              <span class="var-media-size">${FGW.escapeHtml(m.fileSizeStr || '')} • ${typeLabel}</span>
             </div>
           </div>
-          <button type="button" class="btn-remove-var-media" data-index="${index}" title="Remover mídia desta variação">
-            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
-              <polyline points="3 6 5 6 21 6"/>
-              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
-            </svg>
-          </button>
+          <div class="var-media-right-tools">
+            <label class="media-toggle-switch" title="${isMediaEnabled ? 'Mídia ativada: será enviada junto com o texto. Clique para enviar apenas o texto.' : 'Mídia pausada: apenas o texto será enviado. Clique para ativar o envio da mídia.'}">
+              <input type="checkbox" class="chk-toggle-media-send" data-index="${index}" ${isMediaEnabled ? 'checked' : ''}>
+              <span class="media-toggle-slider"></span>
+              <span class="media-toggle-label">${isMediaEnabled ? 'Enviar Mídia' : 'Apenas Texto'}</span>
+            </label>
+            <button type="button" class="btn-remove-var-media" data-index="${index}" title="Remover mídia desta variação">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="3 6 5 6 21 6"/>
+                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+              </svg>
+            </button>
+          </div>
         </div>
       `;
     }
@@ -370,13 +496,19 @@ FGW.renderVariations = function() {
           ${previewBadgeHtml}
         </div>
         <div class="variation-actions">
+          <button type="button" class="btn-var-send-now" data-index="${index}" title="Enviar esta variação agora para o grupo ativo">
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor">
+              <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+            </svg>
+            <span>Enviar ao Grupo</span>
+          </button>
           <button type="button" class="${attachBtnClass}" data-index="${index}" title="${attachBtnTitle}">
             <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
             </svg>
             <span>${attachBtnText}</span>
           </button>
-          <input type="file" class="var-file-input" data-index="${index}" accept="image/*,video/mp4,application/pdf" style="display: none;">
+          <input type="file" class="var-file-input" data-index="${index}" accept="image/*,video/*,audio/*,.mp3,.wav,.ogg,.m4a,.aac,.opus,.pdf" style="display: none;">
           <button type="button" class="btn-delete-variation" data-index="${index}" title="Excluir esta variação">
             <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
               <polyline points="3 6 5 6 21 6"/>
@@ -386,16 +518,24 @@ FGW.renderVariations = function() {
         </div>
       </div>
 
-      <textarea placeholder="Digite a mensagem ou legenda da mídia..." data-index="${index}">${FGW.escapeHtml(textValue)}</textarea>
+      <textarea class="variation-textarea" placeholder="Digite a mensagem ou legenda da mídia..." data-index="${index}" spellcheck="false">${FGW.escapeHtml(textValue)}</textarea>
 
       ${mediaPreviewHtml}
     `;
 
-    // Clique no Card ativa o preview desta variação
+    // Clique no Card ativa o preview desta variação e foca o textarea se o clique foi no card
     card.addEventListener('click', (e) => {
-      if (e.target.closest('button') || e.target.closest('input')) return;
-      FGW.state.previewVariationIndex = index;
-      FGW.updateWhatsAppMobilePreview();
+      if (e.target.closest('button') || e.target.closest('input') || e.target.closest('.variation-media-preview')) return;
+      
+      const textarea = card.querySelector('textarea');
+      if (textarea && e.target !== textarea) {
+        textarea.focus();
+      }
+
+      if (FGW.state.previewVariationIndex !== index) {
+        FGW.state.previewVariationIndex = index;
+        FGW.updateWhatsAppMobilePreview();
+      }
     });
 
     elements.variationsList.appendChild(card);
@@ -403,6 +543,19 @@ FGW.renderVariations = function() {
 
   // Event Listeners dos Textareas (atualizam o preview em tempo real)
   elements.variationsList.querySelectorAll('textarea').forEach(textarea => {
+    // Garante que não esteja bloqueado se não estiver disparando
+    textarea.disabled = Boolean(FGW.state.isDispatching);
+
+    textarea.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const idx = parseInt(textarea.dataset.index, 10);
+      FGW.state.lastFocusedTextarea = textarea;
+      if (FGW.state.previewVariationIndex !== idx) {
+        FGW.state.previewVariationIndex = idx;
+        FGW.updateWhatsAppMobilePreview();
+      }
+    });
+
     textarea.addEventListener('input', (e) => {
       const idx = parseInt(e.target.dataset.index, 10);
       const list = FGW.getCurrentActiveVariationsList();
@@ -412,16 +565,35 @@ FGW.renderVariations = function() {
         FGW.saveActiveVariations();
         FGW.updateVariationsBadge();
         FGW.updateWhatsAppMobilePreview();
-        if (FGW.renderGroupsTable) FGW.renderGroupsTable();
-        FGW.updateVariationScopeSelectorOptions();
       }
     });
 
     textarea.addEventListener('focus', (e) => {
       const idx = parseInt(e.target.dataset.index, 10);
       FGW.state.lastFocusedTextarea = e.target;
-      FGW.state.previewVariationIndex = idx;
-      FGW.updateWhatsAppMobilePreview();
+      if (FGW.state.previewVariationIndex !== idx) {
+        FGW.state.previewVariationIndex = idx;
+        FGW.updateWhatsAppMobilePreview();
+      }
+    });
+
+    textarea.addEventListener('blur', () => {
+      if (FGW.state.activeMessageScope !== '__global__') {
+        if (FGW.renderGroupsTable) FGW.renderGroupsTable();
+        FGW.updateVariationScopeSelectorOptions();
+      }
+    });
+  });
+
+  // Botões de Envio Direto da Variação para o Grupo Ativo
+  elements.variationsList.querySelectorAll('.btn-var-send-now').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const targetBtn = e.target.closest('.btn-var-send-now');
+      const idx = parseInt(targetBtn.dataset.index, 10);
+      if (FGW.handleSendVariationToActiveGroup) {
+        await FGW.handleSendVariationToActiveGroup(idx, targetBtn);
+      }
     });
   });
 
@@ -448,7 +620,7 @@ FGW.renderVariations = function() {
         mediatype = 'image';
       } else if (file.type.startsWith('video/')) {
         mediatype = 'video';
-      } else if (file.type.startsWith('audio/')) {
+      } else if (file.type.startsWith('audio/') || /\.(mp3|wav|ogg|m4a|aac|opus|wma|amr)$/i.test(file.name)) {
         mediatype = 'audio';
       }
 
@@ -471,6 +643,7 @@ FGW.renderVariations = function() {
           fileName: file.name,
           fileSizeStr: sizeFormatted
         };
+        list[idx].mediaEnabled = true;
 
         FGW.state.previewVariationIndex = idx;
         FGW.saveActiveVariations();
@@ -488,6 +661,25 @@ FGW.renderVariations = function() {
       };
 
       reader.readAsDataURL(file);
+    });
+  });
+
+  // Chave Toggle: Ligar / Desligar envio da mídia por variação
+  elements.variationsList.querySelectorAll('.chk-toggle-media-send').forEach(chk => {
+    chk.addEventListener('change', (e) => {
+      e.stopPropagation();
+      const idx = parseInt(e.target.dataset.index, 10);
+      const list = FGW.getCurrentActiveVariationsList();
+      if (list[idx]) {
+        list[idx].mediaEnabled = e.target.checked;
+        FGW.saveActiveVariations();
+        FGW.renderVariations();
+        FGW.updateVariationsBadge();
+        FGW.updateWhatsAppMobilePreview();
+        if (FGW.renderGroupsTable) FGW.renderGroupsTable();
+        FGW.updateVariationScopeSelectorOptions();
+        FGW.log('INFO', `Variação #${idx + 1}: envio de mídia ${e.target.checked ? 'ATIVADO (irá com o texto)' : 'DESATIVADO (irá apenas o texto)'}.`, 'info');
+      }
     });
   });
 
@@ -536,7 +728,7 @@ FGW.renderVariations = function() {
 
 FGW.handleAddVariation = function() {
   const list = FGW.getCurrentActiveVariationsList();
-  list.push({ text: '', media: null });
+  list.push({ text: '', media: null, mediaEnabled: true });
   FGW.state.previewVariationIndex = list.length - 1;
 
   if (FGW.state.activeMessageScope !== '__global__') {
@@ -564,8 +756,8 @@ FGW.getValidVariations = function() {
   return FGW.state.messageVariations.filter(v => {
     if (!v) return false;
     const hasText = (v.text || '').trim().length > 0;
-    const hasMedia = !!(v.media && v.media.dataUrl);
-    return hasText || hasMedia;
+    const hasActiveMedia = !!(v.media && v.media.dataUrl && v.mediaEnabled !== false);
+    return hasText || hasActiveMedia;
   });
 };
 
@@ -591,8 +783,8 @@ FGW.updateVariationsBadge = function() {
     const groupValidCount = list.filter(v => {
       if (!v) return false;
       const hasText = (v.text || '').trim().length > 0;
-      const hasMedia = !!(v.media && v.media.dataUrl);
-      return hasText || hasMedia;
+      const hasActiveMedia = !!(v.media && v.media.dataUrl && v.mediaEnabled !== false);
+      return hasText || hasActiveMedia;
     }).length;
 
     if (elements.variationsCountBadge) {
@@ -612,6 +804,475 @@ FGW.updateVariationsBadge = function() {
   if (FGW.updateCampaignSummary) FGW.updateCampaignSummary();
 };
 
+FGW.state.realMessages = FGW.state.realMessages || {};
+
+/**
+ * Adiciona uma mensagem ao histórico do grupo e persiste no localStorage
+ */
+FGW.addRealChatMessage = function(groupId, msg) {
+  if (!groupId || !msg) return;
+  FGW.state.realMessages = FGW.state.realMessages || {};
+  FGW.state.realMessages[groupId] = FGW.state.realMessages[groupId] || [];
+
+  const existingIdx = FGW.state.realMessages[groupId].findIndex(m => m.id === msg.id);
+  if (existingIdx >= 0) {
+    FGW.state.realMessages[groupId][existingIdx] = { ...FGW.state.realMessages[groupId][existingIdx], ...msg };
+  } else {
+    // Evita duplicar se já existir mensagem com mesmo texto, mesmo remetente e timestamp próximo (< 90s)
+    const duplicateIdx = FGW.state.realMessages[groupId].findIndex(m => {
+      const sameText = (m.text || '').trim() === (msg.text || '').trim();
+      const sameFromMe = Boolean(m.fromMe) === Boolean(msg.fromMe);
+      const timeDiff = Math.abs((m.timestamp || 0) - (msg.timestamp || 0));
+      return sameText && sameFromMe && timeDiff < 90000;
+    });
+
+    if (duplicateIdx >= 0) {
+      // Atualiza com dados oficiais em vez de duplicar
+      FGW.state.realMessages[groupId][duplicateIdx] = { ...FGW.state.realMessages[groupId][duplicateIdx], ...msg };
+    } else {
+      FGW.state.realMessages[groupId].push(msg);
+    }
+  }
+
+  // Deduplicação geral de segurança
+  const cleanList = [];
+  const seenKeys = new Set();
+  FGW.state.realMessages[groupId].forEach(m => {
+    if (!m || !m.text) return;
+    const key = `${m.fromMe ? 'out' : 'in'}_${m.text.trim()}_${Math.floor((m.timestamp || 0) / 45000)}`;
+    if (seenKeys.has(key)) return;
+    seenKeys.add(key);
+    cleanList.push(m);
+  });
+
+  // Ordena por timestamp cronológico
+  cleanList.sort((a, b) => a.timestamp - b.timestamp);
+  FGW.state.realMessages[groupId] = cleanList;
+
+  // Persiste no localStorage permanentemente
+  if (FGW.saveRealMessages) FGW.saveRealMessages();
+
+  // Se o grupo está em foco no chat, atualiza a interface imediatamente
+  const currentFocused = FGW.state.currentChatGroupId || (FGW.elements?.chatTargetGroupSelect?.value);
+  if (currentFocused === groupId) {
+    FGW.renderRealMessages(FGW.state.realMessages[groupId], groupId);
+  }
+};
+window.addRealChatMessage = FGW.addRealChatMessage;
+
+/**
+ * Busca histórico real de mensagens do grupo via Evolution API
+ * @param {string} targetGroupId
+ * @param {boolean} isSilent - Se true, não substitui o conteúdo por "Carregando..." para auto-refresh contínuo
+ */
+FGW.loadRealChatMessages = async function(targetGroupId, isSilent = false) {
+  const elements = FGW.elements || {};
+  if (!elements.realChatMessagesList) return;
+
+  const isConnected = FGW.state.connectionStatus === 'connected' ||
+    (elements.connectionStatusBadge && elements.connectionStatusBadge.classList.contains('connected')) ||
+    (elements.chatConnectedState && !elements.chatConnectedState.classList.contains('hidden'));
+
+  // Se o WhatsApp não estiver conectado, apenas renderiza o histórico local salvo
+  let groupId = targetGroupId || FGW.state.currentChatGroupId || (elements.chatTargetGroupSelect ? elements.chatTargetGroupSelect.value : null);
+  if (!groupId || groupId === '__preview_default__') {
+    const selectedGroups = (FGW.state.groups || []).filter(g => FGW.state.selectedGroupIds.has(g.id));
+    if (selectedGroups.length > 0) {
+      groupId = selectedGroups[0].id;
+      if (elements.chatTargetGroupSelect) {
+        elements.chatTargetGroupSelect.value = groupId;
+      }
+    } else {
+      elements.realChatMessagesList.innerHTML = `
+        <div class="wa-real-msg-empty">
+          <p>Nenhum grupo selecionado.</p>
+          <span style="font-size: 0.72rem; color: #8696a0;">Selecione um ou mais grupos na coluna da esquerda para inspecionar e interagir com o chat.</span>
+        </div>
+      `;
+      return;
+    }
+  }
+
+  // Renderiza imediatamente as mensagens locais do cache (com deduplicação em memória)
+  const cachedMessages = FGW.state.realMessages[groupId] || [];
+  if (cachedMessages.length > 0) {
+    FGW.renderRealMessages(cachedMessages, groupId);
+  } else if (!isSilent) {
+    elements.realChatMessagesList.innerHTML = `
+      <div class="wa-real-msg-empty">
+        <p>Carregando histórico de mensagens...</p>
+      </div>
+    `;
+  }
+
+  if (!isConnected) {
+    return;
+  }
+
+  const instanceName = FGW.state.activeInstanceName
+    || (elements.connectedInstanceTitle && elements.connectedInstanceTitle.textContent.trim())
+    || (elements.instanceName && elements.instanceName.value.trim())
+    || localStorage.getItem(FGW.STORAGE_KEYS?.INSTANCE_NAME)
+    || 'zapMG';
+
+  try {
+    const res = await window.electronAPI.fetchChatMessages({
+      instanceName,
+      remoteJid: groupId,
+      limit: 50
+    });
+
+    if (res && res.success && Array.isArray(res.data)) {
+      // Mescla mensagens da API com mensagens salvas localmente
+      const localList = FGW.state.realMessages[groupId] || [];
+      const msgMap = new Map();
+
+      // Adiciona mensagens locais ao mapa
+      localList.forEach(m => {
+        if (m && m.id) msgMap.set(m.id, m);
+      });
+
+      // Mescla com as mensagens reais retornadas pelo WhatsApp
+      res.data.forEach(apiMsg => {
+        if (!apiMsg || !apiMsg.id) return;
+
+        // Se existir alguma mensagem temporária local_ com mesmo texto e timestamp próximo, substitui
+        for (const [id, localMsg] of msgMap.entries()) {
+          if (String(id).startsWith('local_') &&
+              Boolean(localMsg.fromMe) === Boolean(apiMsg.fromMe) &&
+              (localMsg.text || '').trim() === (apiMsg.text || '').trim() &&
+              Math.abs((localMsg.timestamp || 0) - (apiMsg.timestamp || 0)) < 90000) {
+            msgMap.delete(id);
+          }
+        }
+
+        msgMap.set(apiMsg.id, apiMsg);
+      });
+
+      // Deduplicação final por chave de conteúdo
+      const merged = Array.from(msgMap.values());
+      const cleanMerged = [];
+      const seenMerged = new Set();
+      
+      merged.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+      merged.forEach(m => {
+        if (!m || !m.text) return;
+        const k = `${m.fromMe ? 'out' : 'in'}_${m.text.trim()}_${Math.floor((m.timestamp || 0) / 45000)}`;
+        if (seenMerged.has(k)) return;
+        seenMerged.add(k);
+        cleanMerged.push(m);
+      });
+
+      FGW.state.realMessages[groupId] = cleanMerged;
+
+      // Salva no localStorage permanentemente
+      if (FGW.saveRealMessages) FGW.saveRealMessages();
+
+      // Atualiza interface se ainda for o grupo em foco
+      const currentFocused = FGW.state.currentChatGroupId || (elements.chatTargetGroupSelect ? elements.chatTargetGroupSelect.value : null);
+      if (currentFocused === groupId) {
+        FGW.renderRealMessages(cleanMerged, groupId);
+      }
+    } else {
+      FGW.renderRealMessages(FGW.state.realMessages[groupId] || [], groupId);
+    }
+  } catch (err) {
+    console.warn('Erro ao carregar mensagens reais do chat:', err);
+    FGW.renderRealMessages(FGW.state.realMessages[groupId] || [], groupId);
+  }
+};
+
+// Polling contínuo em segundo plano para atualizar o chat aberto (a cada 7s)
+if (!FGW._chatPollingInterval) {
+  FGW._chatPollingInterval = setInterval(() => {
+    const isConnected = FGW.state.connectionStatus === 'connected' ||
+      (document.getElementById('connectionStatusBadge')?.classList.contains('connected'));
+    const activeGroup = FGW.state.currentChatGroupId || (document.getElementById('chatTargetGroupSelect')?.value);
+    if (isConnected && activeGroup && activeGroup !== '__preview_default__' && !FGW.state.isDispatching) {
+      FGW.loadRealChatMessages(activeGroup, true);
+    }
+  }, 7000);
+}
+
+/**
+ * Renderiza a lista de mensagens reais no chat
+ */
+FGW.renderRealMessages = function(messages, groupId) {
+  const elements = FGW.elements || {};
+  const container = elements.realChatMessagesList;
+  if (!container) return;
+
+  if (!messages || messages.length === 0) {
+    container.innerHTML = `
+      <div class="wa-real-msg-empty">
+        <p>💬 Nenhuma mensagem gravada neste grupo.</p>
+        <span style="font-size: 0.72rem; color: #8696a0;">Você pode enviar mensagens em tempo real usando o campo de envio abaixo.</span>
+      </div>
+    `;
+    return;
+  }
+
+  let html = '';
+  messages.forEach(msg => {
+    const isOut = Boolean(msg.fromMe);
+    const timeStr = msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+    const bubbleClass = isOut ? 'outgoing' : 'incoming';
+    const sender = isOut ? '' : `<div class="wa-bubble-sender">${FGW.escapeHtml(msg.pushName || 'Participante')}</div>`;
+    const checkIcon = isOut ? `
+      <span class="wa-ticks-blue" title="Mensagem entregue">
+        <svg viewBox="0 0 16 11" width="14" height="11" fill="none">
+          <path d="M11.05 1L5.5 6.55L2.95 4L2 4.95L5.5 8.45L12 2L11.05 1Z" fill="#53bdeb"/>
+          <path d="M14.55 1L9 6.55L8.05 5.6L7.1 6.55L9 8.45L15.5 2L14.55 1Z" fill="#53bdeb"/>
+        </svg>
+      </span>
+    ` : '';
+
+    html += `
+      <div class="wa-bubble-wrapper ${bubbleClass}">
+        <div class="wa-real-bubble">
+          ${sender}
+          <div class="wa-bubble-text">${FGW.formatWhatsAppPreviewText(msg.text)}</div>
+          <div class="wa-bubble-footer-mini">
+            <span>${timeStr}</span>
+            ${checkIcon}
+          </div>
+        </div>
+      </div>
+    `;
+  });
+
+  container.innerHTML = html;
+
+  // Rola o chat suavemente até a base
+  if (elements.whatsappChatBody) {
+    setTimeout(() => {
+      elements.whatsappChatBody.scrollTop = elements.whatsappChatBody.scrollHeight;
+    }, 50);
+  }
+};
+
+/**
+ * Envia uma mensagem real direta digitada no chat
+ */
+FGW.handleSendRealChatMessage = async function() {
+  const elements = FGW.elements || {};
+  if (!elements.chatComposerInput) return;
+
+  if (FGW._isSendingRealMessage) return;
+
+  const text = elements.chatComposerInput.value.trim();
+  if (!text) {
+    elements.chatComposerInput.focus();
+    return;
+  }
+
+  const isConnected = FGW.state.connectionStatus === 'connected' ||
+    (elements.connectionStatusBadge && elements.connectionStatusBadge.classList.contains('connected')) ||
+    (elements.chatConnectedState && !elements.chatConnectedState.classList.contains('hidden'));
+
+  const instanceName = FGW.state.activeInstanceName
+    || (elements.connectedInstanceTitle && elements.connectedInstanceTitle.textContent.trim())
+    || (elements.instanceName && elements.instanceName.value.trim())
+    || localStorage.getItem(FGW.STORAGE_KEYS?.INSTANCE_NAME)
+    || 'zapMG';
+
+  if (!isConnected || !instanceName) {
+    alert('Conecte o WhatsApp para enviar mensagens reais.');
+    return;
+  }
+
+  let groupId = (elements.chatTargetGroupSelect && elements.chatTargetGroupSelect.value !== '__preview_default__' && elements.chatTargetGroupSelect.value)
+    || FGW.state.currentChatGroupId;
+
+  if (!groupId || groupId === '__preview_default__') {
+    const selectedGroups = (FGW.state.groups || []).filter(g => FGW.state.selectedGroupIds.has(g.id));
+    if (selectedGroups.length > 0) {
+      groupId = selectedGroups[0].id;
+    } else if (FGW.state.groups && FGW.state.groups.length > 0) {
+      groupId = FGW.state.groups[0].id;
+    } else {
+      alert('Nenhum grupo disponível para receber mensagens. Por favor, marque ou selecione um grupo na tabela.');
+      return;
+    }
+  }
+
+  // Identifica o nome do grupo para confirmação e feedback claro
+  const targetGroup = (FGW.state.groups || []).find(g => g.id === groupId);
+  const targetName = targetGroup ? (targetGroup.subject || targetGroup.name) : groupId;
+
+  // Feedback visual no botão de envio
+  const btn = elements.btnSendRealChatMessage;
+  if (btn) {
+    btn.disabled = true;
+    btn.style.opacity = '0.6';
+  }
+  FGW._isSendingRealMessage = true;
+
+  try {
+    FGW.log('INFO', `Enviando mensagem direta para o grupo "${targetName}" (${groupId})...`, 'info');
+    const result = await window.electronAPI.sendMessage({
+      instanceName,
+      number: groupId,
+      text,
+      delay: 500
+    });
+
+    if (result && result.success) {
+      // Extrai o ID real da mensagem gerado pelo WhatsApp/Baileys
+      const realMsgId = result.data?.key?.id || result.data?.id || ('local_' + Date.now());
+
+      // Adiciona mensagem ao histórico com ID oficial e persiste
+      FGW.addRealChatMessage(groupId, {
+        id: realMsgId,
+        fromMe: true,
+        pushName: 'Você',
+        text,
+        timestamp: Date.now(),
+        status: 'SENT'
+      });
+
+      elements.chatComposerInput.value = '';
+      FGW.log('SUCESSO', `Mensagem enviada com sucesso para "${targetName}"!`, 'success');
+    } else {
+      const err = result?.error || 'Erro desconhecido ao enviar mensagem.';
+      FGW.log('ERRO', `Falha ao enviar mensagem direta para "${targetName}": ${err}`, 'error');
+      alert(`Falha no envio da mensagem para "${targetName}":\n${err}`);
+    }
+  } catch (err) {
+    FGW.log('ERRO', `Erro inesperado no envio para "${targetName}": ${err.message}`, 'error');
+    alert(`Erro ao enviar mensagem:\n${err.message}`);
+  } finally {
+    FGW._isSendingRealMessage = false;
+    if (btn) {
+      btn.disabled = false;
+      btn.style.opacity = '1';
+    }
+    if (elements.chatComposerInput) {
+      elements.chatComposerInput.focus();
+    }
+  }
+};
+
+/**
+ * Envia uma variação específica diretamente para o grupo ativo no momento
+ */
+FGW.handleSendVariationToActiveGroup = async function(variationIndex, btnElement) {
+  const elements = FGW.elements || {};
+  const activeList = FGW.getCurrentActiveVariationsList();
+  const item = activeList[variationIndex];
+  if (!item) return;
+
+  const isConnected = FGW.state.connectionStatus === 'connected' ||
+    (elements.connectionStatusBadge && elements.connectionStatusBadge.classList.contains('connected')) ||
+    (elements.chatConnectedState && !elements.chatConnectedState.classList.contains('hidden'));
+
+  const instanceName = (elements.instanceName && elements.instanceName.value.trim())
+    || FGW.state.activeInstanceName
+    || localStorage.getItem(FGW.STORAGE_KEYS?.INSTANCE_NAME);
+
+  if (!isConnected || !instanceName) {
+    alert('Conecte o WhatsApp para enviar esta variação.');
+    return;
+  }
+
+  // Identifica o grupo ativo
+  let groupId = FGW.state.currentChatGroupId ||
+    (elements.chatTargetGroupSelect && elements.chatTargetGroupSelect.value !== '__preview_default__' && elements.chatTargetGroupSelect.value);
+
+  if (!groupId || groupId === '__preview_default__') {
+    const selectedGroups = (FGW.state.groups || []).filter(g => FGW.state.selectedGroupIds.has(g.id));
+    if (selectedGroups.length > 0) {
+      groupId = selectedGroups[0].id;
+    } else if (FGW.state.groups && FGW.state.groups.length > 0) {
+      groupId = FGW.state.groups[0].id;
+    } else {
+      alert('Nenhum grupo ativo disponível. Selecione um grupo na tabela de grupos.');
+      return;
+    }
+  }
+
+  const targetGroup = (FGW.state.groups || []).find(g => g.id === groupId) || { id: groupId, subject: 'Grupo Ativo' };
+  const targetName = targetGroup.subject || targetGroup.name || groupId;
+
+  const rawText = item.text || '';
+  const processedText = FGW.applyDynamicTags ? FGW.applyDynamicTags(rawText, targetGroup) : rawText;
+  const hasActiveMedia = Boolean(item.media && item.media.dataUrl && item.mediaEnabled !== false);
+
+  if (btnElement) {
+    btnElement.disabled = true;
+    btnElement.style.opacity = '0.6';
+  }
+
+  try {
+    FGW.log('INFO', `Enviando Variação #${variationIndex + 1} para o grupo ativo "${targetName}"...`, 'info');
+
+    let result;
+    if (hasActiveMedia) {
+      result = await window.electronAPI.sendMediaMessage({
+        instanceName,
+        number: groupId,
+        media: item.media.dataUrl,
+        mediatype: item.media.mediatype,
+        mimetype: item.media.mimetype,
+        fileName: item.media.fileName,
+        caption: processedText,
+        delay: 500
+      });
+    } else {
+      result = await window.electronAPI.sendMessage({
+        instanceName,
+        number: groupId,
+        text: processedText,
+        delay: 500
+      });
+    }
+
+    if (result && result.success) {
+      const realMsgId = result.data?.key?.id || ('var_direct_' + Date.now());
+      let mediaIcon = '📷';
+      if (item.media?.mediatype === 'audio') mediaIcon = '🎤';
+      else if (item.media?.mediatype === 'video') mediaIcon = '🎥';
+      else if (item.media?.mediatype === 'document') mediaIcon = '📄';
+
+      const sentText = (hasActiveMedia && item.media?.fileName)
+        ? (processedText ? `${mediaIcon} ${item.media.fileName}\n${processedText}` : `${mediaIcon} ${item.media.fileName}`)
+        : processedText;
+
+      FGW.addRealChatMessage(groupId, {
+        id: realMsgId,
+        fromMe: true,
+        pushName: 'Você (Variação)',
+        text: sentText,
+        timestamp: Date.now(),
+        status: 'SENT'
+      });
+
+      FGW.log('SUCESSO', `Variação #${variationIndex + 1} enviada com sucesso para o grupo "${targetName}"!`, 'success');
+      if (btnElement) {
+        btnElement.classList.add('is-sent-success');
+        const origHtml = btnElement.innerHTML;
+        btnElement.innerHTML = `<span>✓ Enviado!</span>`;
+        setTimeout(() => {
+          btnElement.classList.remove('is-sent-success');
+          btnElement.innerHTML = origHtml;
+        }, 2200);
+      }
+    } else {
+      const err = result?.error || 'Erro desconhecido ao enviar variação.';
+      FGW.log('ERRO', `Falha ao enviar Variação #${variationIndex + 1}: ${err}`, 'error');
+      alert(`Falha no envio para "${targetName}":\n${err}`);
+    }
+  } catch (err) {
+    FGW.log('ERRO', `Erro inesperado: ${err.message}`, 'error');
+    alert(`Erro ao enviar variação:\n${err.message}`);
+  } finally {
+    if (btnElement) {
+      btnElement.disabled = false;
+      btnElement.style.opacity = '1';
+    }
+  }
+};
+
 window.renderVariations = FGW.renderVariations;
 window.handleAddVariation = FGW.handleAddVariation;
 window.getValidVariations = FGW.getValidVariations;
@@ -623,4 +1284,11 @@ window.handleCopyGlobalToGroup = FGW.handleCopyGlobalToGroup;
 window.getVariationsForGroup = FGW.getVariationsForGroup;
 window.updateWhatsAppMobilePreview = FGW.updateWhatsAppMobilePreview;
 window.formatWhatsAppPreviewText = FGW.formatWhatsAppPreviewText;
+window.loadRealChatMessages = FGW.loadRealChatMessages;
+window.renderRealMessages = FGW.renderRealMessages;
+window.handleSendRealChatMessage = FGW.handleSendRealChatMessage;
+window.handleSendVariationToActiveGroup = FGW.handleSendVariationToActiveGroup;
+window.togglePreviewAudioPlayback = FGW.togglePreviewAudioPlayback;
+
+
 
