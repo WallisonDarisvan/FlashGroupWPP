@@ -56,48 +56,151 @@ FGW.initIndexedDB = function() {
   });
 };
 
-FGW.saveInstanceNameToIndexedDB = async function(instanceName) {
-  const name = (instanceName || '').trim();
-  if (!name) return;
-  localStorage.setItem(FGW.STORAGE_KEYS.INSTANCE_NAME, name);
+FGW.saveToIndexedDB = async function(key, value) {
   try {
     if (!FGW.db) await FGW.initIndexedDB();
-    if (!FGW.db) return;
+    if (!FGW.db) return false;
     return new Promise((resolve) => {
       const tx = FGW.db.transaction('app_instance', 'readwrite');
       const store = tx.objectStore('app_instance');
-      store.put({ key: 'instanceName', value: name, updatedAt: Date.now() });
+      store.put({ key, value, updatedAt: Date.now() });
+      tx.oncomplete = () => resolve(true);
+      tx.onerror = (e) => {
+        console.warn(`[IndexedDB] Erro ao salvar chave "${key}":`, e.target.error);
+        resolve(false);
+      };
+    });
+  } catch (err) {
+    console.warn(`[IndexedDB] Exceção ao salvar chave "${key}":`, err);
+    return false;
+  }
+};
+
+FGW.loadFromIndexedDB = async function(key) {
+  try {
+    if (!FGW.db) await FGW.initIndexedDB();
+    if (!FGW.db) return null;
+    return new Promise((resolve) => {
+      const tx = FGW.db.transaction('app_instance', 'readonly');
+      const store = tx.objectStore('app_instance');
+      const req = store.get(key);
+      req.onsuccess = () => {
+        if (req.result && req.result.value !== undefined) {
+          resolve(req.result.value);
+        } else {
+          resolve(null);
+        }
+      };
+      req.onerror = () => resolve(null);
+    });
+  } catch (err) {
+    console.warn(`[IndexedDB] Exceção ao carregar chave "${key}":`, err);
+    return null;
+  }
+};
+
+FGW.deleteFromIndexedDB = async function(key) {
+  try {
+    if (!FGW.db) await FGW.initIndexedDB();
+    if (!FGW.db) return false;
+    return new Promise((resolve) => {
+      const tx = FGW.db.transaction('app_instance', 'readwrite');
+      const store = tx.objectStore('app_instance');
+      store.delete(key);
       tx.oncomplete = () => resolve(true);
       tx.onerror = () => resolve(false);
     });
   } catch (err) {
-    console.warn('[IndexedDB] Erro ao salvar:', err);
+    console.warn(`[IndexedDB] Exceção ao deletar chave "${key}":`, err);
+    return false;
   }
 };
 
+FGW.saveInstanceNameToIndexedDB = async function(instanceName) {
+  const name = (instanceName || '').trim();
+  if (!name) return;
+  try { localStorage.setItem(FGW.STORAGE_KEYS.INSTANCE_NAME, name); } catch (e) {}
+  return FGW.saveToIndexedDB('instanceName', name);
+};
+
 FGW.loadInstanceNameFromIndexedDB = async function() {
-  try {
-    if (!FGW.db) await FGW.initIndexedDB();
-    if (FGW.db) {
-      const dbValue = await new Promise((resolve) => {
-        const tx = FGW.db.transaction('app_instance', 'readonly');
-        const store = tx.objectStore('app_instance');
-        const req = store.get('instanceName');
-        req.onsuccess = () => {
-          if (req.result && req.result.value) {
-            resolve(req.result.value);
-          } else {
-            resolve(null);
-          }
-        };
-        req.onerror = () => resolve(null);
-      });
-      if (dbValue) return dbValue;
-    }
-  } catch (err) {
-    console.warn('[IndexedDB] Erro ao carregar:', err);
-  }
+  const idbVal = await FGW.loadFromIndexedDB('instanceName');
+  if (idbVal) return idbVal;
   return localStorage.getItem(FGW.STORAGE_KEYS.INSTANCE_NAME) || '';
+};
+
+FGW.deleteInstanceNameFromIndexedDB = async function() {
+  try { localStorage.removeItem(FGW.STORAGE_KEYS.INSTANCE_NAME); } catch (e) {}
+  return FGW.deleteFromIndexedDB('instanceName');
+};
+
+/**
+ * Persiste as variações de mensagem (incluindo mídias/vídeos pesados em Base64) no IndexedDB
+ */
+FGW.saveVariationsToIndexedDB = async function(variations) {
+  const list = Array.isArray(variations) ? variations : FGW.state.messageVariations;
+  return FGW.saveToIndexedDB('messageVariations', list);
+};
+
+/**
+ * Carrega as variações do IndexedDB com fallback e migração transparente do localStorage
+ */
+FGW.loadVariationsFromIndexedDB = async function() {
+  const idbVars = await FGW.loadFromIndexedDB('messageVariations');
+  if (Array.isArray(idbVars) && idbVars.length > 0) {
+    return idbVars;
+  }
+
+  // Migração transparente do localStorage para o IndexedDB
+  try {
+    const raw = localStorage.getItem(FGW.STORAGE_KEYS.VARIATIONS);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        await FGW.saveVariationsToIndexedDB(parsed);
+        return parsed;
+      }
+    }
+  } catch (e) {}
+
+  return null;
+};
+
+/**
+ * Persiste as variações customizadas por grupo no IndexedDB
+ */
+FGW.saveGroupCustomVariationsToIndexedDB = async function(groupVars) {
+  const data = groupVars || FGW.state.groupCustomVariations || {};
+  return FGW.saveToIndexedDB('groupCustomVariations', data);
+};
+
+/**
+ * Carrega as variações customizadas por grupo do IndexedDB
+ */
+FGW.loadGroupCustomVariationsFromIndexedDB = async function() {
+  const idbData = await FGW.loadFromIndexedDB('groupCustomVariations');
+  if (idbData && typeof idbData === 'object') {
+    return idbData;
+  }
+
+  // Migração transparente do localStorage para o IndexedDB
+  try {
+    const raw = localStorage.getItem(FGW.STORAGE_KEYS.GROUP_CUSTOM_VARIATIONS);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') {
+        await FGW.saveGroupCustomVariationsToIndexedDB(parsed);
+        return parsed;
+      }
+    }
+  } catch (e) {}
+
+  return null;
+};
+
+FGW.generateMachineInstanceName = function() {
+  const rand = Math.random().toString(36).substring(2, 7);
+  return `fgw-${rand}`;
 };
 
 FGW.loadSavedSettings = function() {
@@ -223,63 +326,118 @@ FGW.loadSavedSettings = function() {
 };
 
 FGW.saveSettings = function() {
-  const elements = FGW.elements || {};
-  const KEYS = FGW.STORAGE_KEYS;
-  if (elements.instanceName) {
-    const val = elements.instanceName.value.trim();
-    localStorage.setItem(KEYS.INSTANCE_NAME, val);
-    if (val && FGW.saveInstanceNameToIndexedDB) {
-      FGW.saveInstanceNameToIndexedDB(val);
+  try {
+    const elements = FGW.elements || {};
+    const KEYS = FGW.STORAGE_KEYS;
+    if (elements.instanceName) {
+      const val = elements.instanceName.value.trim();
+      try { localStorage.setItem(KEYS.INSTANCE_NAME, val); } catch (e) {}
+      if (val && FGW.saveInstanceNameToIndexedDB) {
+        FGW.saveInstanceNameToIndexedDB(val);
+      }
     }
+    if (elements.minDelay) {
+      try { localStorage.setItem(KEYS.MIN_DELAY, elements.minDelay.value); } catch (e) {}
+    }
+    if (elements.maxDelay) {
+      try { localStorage.setItem(KEYS.MAX_DELAY, elements.maxDelay.value); } catch (e) {}
+    }
+    if (elements.presenceDelay) {
+      try { localStorage.setItem(KEYS.PRESENCE_DELAY, elements.presenceDelay.value); } catch (e) {}
+    }
+    try {
+      localStorage.setItem(KEYS.VARIATIONS, JSON.stringify(FGW.state.messageVariations));
+    } catch (quotaErr) {
+      // Ignora erro de cota no localStorage, pois os vídeos pesados são persistidos com sucesso no IndexedDB
+    }
+
+    // Persistência robusta no IndexedDB (sem limite de 5MB)
+    if (FGW.saveVariationsToIndexedDB) {
+      FGW.saveVariationsToIndexedDB(FGW.state.messageVariations);
+    }
+
+    if (FGW.updateCampaignSummary) FGW.updateCampaignSummary();
+  } catch (err) {
+    console.warn('[Storage] Falha em saveSettings:', err);
   }
-  if (elements.minDelay) localStorage.setItem(KEYS.MIN_DELAY, elements.minDelay.value);
-  if (elements.maxDelay) localStorage.setItem(KEYS.MAX_DELAY, elements.maxDelay.value);
-  if (elements.presenceDelay) localStorage.setItem(KEYS.PRESENCE_DELAY, elements.presenceDelay.value);
-  localStorage.setItem(KEYS.VARIATIONS, JSON.stringify(FGW.state.messageVariations));
-  if (FGW.updateCampaignSummary) FGW.updateCampaignSummary();
 };
 
 FGW.saveGroupCustomTags = function() {
-  localStorage.setItem(FGW.STORAGE_KEYS.GROUP_CUSTOM_TAGS, JSON.stringify(FGW.state.groupCustomTags));
+  try {
+    localStorage.setItem(FGW.STORAGE_KEYS.GROUP_CUSTOM_TAGS, JSON.stringify(FGW.state.groupCustomTags));
+  } catch (e) {
+    console.warn('[Storage] Falha em saveGroupCustomTags:', e);
+  }
 };
 
 FGW.saveCustomVariables = function() {
-  localStorage.setItem(FGW.STORAGE_KEYS.CUSTOM_VARIABLES, JSON.stringify(FGW.state.customVariables));
+  try {
+    localStorage.setItem(FGW.STORAGE_KEYS.CUSTOM_VARIABLES, JSON.stringify(FGW.state.customVariables));
+  } catch (e) {
+    console.warn('[Storage] Falha em saveCustomVariables:', e);
+  }
 };
 
 FGW.saveGroupCustomVars = function() {
-  localStorage.setItem(FGW.STORAGE_KEYS.GROUP_CUSTOM_VARS, JSON.stringify(FGW.state.groupCustomVars));
+  try {
+    localStorage.setItem(FGW.STORAGE_KEYS.GROUP_CUSTOM_VARS, JSON.stringify(FGW.state.groupCustomVars));
+  } catch (e) {
+    console.warn('[Storage] Falha em saveGroupCustomVars:', e);
+  }
 };
 
 FGW.saveSelectedGroupIds = function() {
-  localStorage.setItem(FGW.STORAGE_KEYS.SELECTED_GROUP_IDS, JSON.stringify(Array.from(FGW.state.selectedGroupIds)));
+  try {
+    localStorage.setItem(FGW.STORAGE_KEYS.SELECTED_GROUP_IDS, JSON.stringify(Array.from(FGW.state.selectedGroupIds)));
+  } catch (e) {
+    console.warn('[Storage] Falha em saveSelectedGroupIds:', e);
+  }
 };
 
 FGW.saveCachedGroups = function() {
-  localStorage.setItem(FGW.STORAGE_KEYS.CACHED_GROUPS, JSON.stringify(FGW.state.groups));
+  try {
+    localStorage.setItem(FGW.STORAGE_KEYS.CACHED_GROUPS, JSON.stringify(FGW.state.groups));
+  } catch (e) {
+    console.warn('[Storage] Falha em saveCachedGroups:', e);
+  }
 };
 
 FGW.saveGroupCustomVariations = function() {
-  localStorage.setItem(FGW.STORAGE_KEYS.GROUP_CUSTOM_VARIATIONS, JSON.stringify(FGW.state.groupCustomVariations));
+  try {
+    localStorage.setItem(FGW.STORAGE_KEYS.GROUP_CUSTOM_VARIATIONS, JSON.stringify(FGW.state.groupCustomVariations));
+  } catch (e) {
+    // Ignora erro de cota no localStorage
+  }
+
+  // Persistência robusta no IndexedDB
+  if (FGW.saveGroupCustomVariationsToIndexedDB) {
+    FGW.saveGroupCustomVariationsToIndexedDB(FGW.state.groupCustomVariations);
+  }
 };
 
 /**
- * Salva o histórico de mensagens reais por grupo no localStorage
+ * Salva o histórico de mensagens reais por grupo de forma segura e leve
  */
 FGW.saveRealMessages = function() {
   const KEYS = FGW.STORAGE_KEYS;
   try {
     const dataToSave = {};
     const messagesByGroup = FGW.state.realMessages || {};
-    // Salva as últimas 100 mensagens por grupo
+    // Salva até 50 mensagens recentes por grupo, removendo thumbnails pesados em base64
     for (const [gid, msgs] of Object.entries(messagesByGroup)) {
       if (Array.isArray(msgs) && msgs.length > 0) {
-        dataToSave[gid] = msgs.slice(-100);
+        dataToSave[gid] = msgs.slice(-50).map(m => {
+          if (m.mediaDetails && m.mediaDetails.jpegThumbnail) {
+            const { jpegThumbnail, ...cleanDetails } = m.mediaDetails;
+            return { ...m, mediaDetails: cleanDetails };
+          }
+          return m;
+        });
       }
     }
     localStorage.setItem(KEYS.REAL_MESSAGES, JSON.stringify(dataToSave));
   } catch (e) {
-    console.warn('Erro ao salvar mensagens do chat no storage:', e);
+    console.warn('[Storage] Erro ao salvar mensagens do chat no storage (ignorado com segurança):', e);
   }
 };
 

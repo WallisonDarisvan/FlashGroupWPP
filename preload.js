@@ -48,10 +48,22 @@ contextBridge.exposeInMainWorld('electronAPI', {
   sendMediaMessage: (params) => ipcRenderer.invoke('api:send-media', params),
 
   /**
+   * Obtém mídia em base64 de uma mensagem para visualização ou áudio no chat
+   * @param {Object} params { instanceName, messageId }
+   */
+  getMediaBase64: (params) => ipcRenderer.invoke('api:get-media-base64', params),
+
+  /**
    * Abre uma URL externa no navegador padrão do sistema
    * @param {string} url
    */
   openExternal: (url) => ipcRenderer.invoke('app:open-external', url),
+
+  /**
+   * Exibe notificação nativa do sistema operacional (Windows)
+   * @param {Object} params { title, body }
+   */
+  showNotification: (params) => ipcRenderer.invoke('app:show-notification', params),
 
   /**
    * Verifica se há atualizações disponíveis no GitHub Releases

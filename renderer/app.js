@@ -137,9 +137,39 @@ FGW.setupEventListeners = function() {
   if (elements.btnInsertGroupIdTag) elements.btnInsertGroupIdTag.addEventListener('click', FGW.handleInsertGroupIdTag);
   if (elements.btnOpenVariablesManager) elements.btnOpenVariablesManager.addEventListener('click', FGW.openVariablesModal);
 
+  // Modelos de Campanha (.fgw)
+  if (elements.btnExportTemplate) {
+    elements.btnExportTemplate.addEventListener('click', () => {
+      if (typeof FGW.exportCampaignTemplate === 'function') {
+        FGW.exportCampaignTemplate();
+      }
+    });
+  }
+  if (elements.btnImportTemplate) {
+    elements.btnImportTemplate.addEventListener('click', () => {
+      if (elements.inputImportTemplate) elements.inputImportTemplate.click();
+    });
+  }
+  if (elements.inputImportTemplate) {
+    elements.inputImportTemplate.addEventListener('change', (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (file && typeof FGW.importCampaignTemplateFromFile === 'function') {
+        FGW.importCampaignTemplateFromFile(file);
+      }
+      e.target.value = '';
+    });
+  }
+
   // Ações de Disparo & Terminal (Barra Inferior)
   if (elements.btnStartDispatch) elements.btnStartDispatch.addEventListener('click', FGW.handleStartDispatch);
   if (elements.btnCancelDispatch) elements.btnCancelDispatch.addEventListener('click', FGW.handleCancelDispatch);
+  if (elements.btnExportReport) {
+    elements.btnExportReport.addEventListener('click', () => {
+      if (typeof FGW.exportDispatchReportToExcel === 'function') {
+        FGW.exportDispatchReportToExcel();
+      }
+    });
+  }
   if (elements.btnToggleTerminalDrawer) elements.btnToggleTerminalDrawer.addEventListener('click', FGW.toggleTerminalDrawer);
   if (elements.btnCloseTerminalDrawer) elements.btnCloseTerminalDrawer.addEventListener('click', FGW.closeTerminalDrawer);
   if (elements.btnClearLogs) {
@@ -330,7 +360,7 @@ FGW.setupAutoUpdateUI = function() {
         case 'not-available':
           if (elements.updateStatusText) {
             elements.updateStatusText.className = 'update-status-text';
-            elements.updateStatusText.textContent = '✓ Versão mais recente (v1.0.2)';
+            elements.updateStatusText.textContent = '✓ Versão mais recente (v1.0.3)';
             setTimeout(() => {
               if (elements.updateStatusText) elements.updateStatusText.textContent = '';
             }, 5000);
@@ -380,6 +410,25 @@ document.addEventListener('DOMContentLoaded', async () => {
     const savedIdb = await FGW.loadInstanceNameFromIndexedDB();
     if (savedIdb && FGW.elements?.instanceName) {
       FGW.elements.instanceName.value = savedIdb;
+    } else if (!savedIdb && FGW.elements?.instanceName) {
+      const suggested = FGW.generateMachineInstanceName ? FGW.generateMachineInstanceName() : `fgw-${Math.random().toString(36).substring(2, 7)}`;
+      FGW.elements.instanceName.value = suggested;
+    }
+  }
+
+  // Carrega as variações (incluindo vídeos e mídias pesadas) do IndexedDB
+  if (FGW.loadVariationsFromIndexedDB) {
+    const idbVars = await FGW.loadVariationsFromIndexedDB();
+    if (Array.isArray(idbVars) && idbVars.length > 0) {
+      FGW.state.messageVariations = idbVars;
+    }
+  }
+
+  // Carrega as variações customizadas por grupo do IndexedDB
+  if (FGW.loadGroupCustomVariationsFromIndexedDB) {
+    const idbGroupVars = await FGW.loadGroupCustomVariationsFromIndexedDB();
+    if (idbGroupVars && typeof idbGroupVars === 'object') {
+      FGW.state.groupCustomVariations = idbGroupVars;
     }
   }
 

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, Menu, Notification, nativeImage } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const fs = require('fs');
@@ -55,6 +55,33 @@ function createWindow() {
   });
 
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+
+  // Menu de contexto com botão direito (Recortar, Copiar, Colar, Selecionar Tudo)
+  mainWindow.webContents.on('context-menu', (_event, params) => {
+    const isEditable = params.isEditable;
+    const menuTemplate = [];
+
+    if (isEditable) {
+      menuTemplate.push(
+        { role: 'undo', label: 'Desfazer' },
+        { role: 'redo', label: 'Refazer' },
+        { type: 'separator' },
+        { role: 'cut', label: 'Recortar' },
+        { role: 'copy', label: 'Copiar' },
+        { role: 'paste', label: 'Colar' },
+        { type: 'separator' },
+        { role: 'selectAll', label: 'Selecionar Tudo' }
+      );
+    } else {
+      menuTemplate.push(
+        { role: 'copy', label: 'Copiar' },
+        { role: 'selectAll', label: 'Selecionar Tudo' }
+      );
+    }
+
+    const menu = Menu.buildFromTemplate(menuTemplate);
+    menu.popup();
+  });
 
   mainWindow.once('ready-to-show', () => {
     mainWindow.maximize();
@@ -526,26 +553,65 @@ function setupIpcHandlers() {
           
           let text = '';
           let mediaType = null;
+          let mediaDetails = null;
           const m = msg.message || {};
+
           if (m.conversation) {
             text = m.conversation;
           } else if (m.extendedTextMessage?.text) {
             text = m.extendedTextMessage.text;
           } else if (m.imageMessage) {
-            text = m.imageMessage.caption || '📷 Foto';
+            text = m.imageMessage.caption || '';
             mediaType = 'image';
+            mediaDetails = {
+              mimetype: m.imageMessage.mimetype || 'image/jpeg',
+              caption: m.imageMessage.caption || '',
+              jpegThumbnail: m.imageMessage.jpegThumbnail ? `data:image/jpeg;base64,${Buffer.from(m.imageMessage.jpegThumbnail).toString('base64')}` : null
+            };
           } else if (m.videoMessage) {
-            text = m.videoMessage.caption || '🎥 Vídeo';
+            text = m.videoMessage.caption || '';
             mediaType = 'video';
-          } else if (m.documentMessage) {
-            text = `📄 ${m.documentMessage.title || m.documentMessage.fileName || 'Documento'}`;
-            mediaType = 'document';
+            mediaDetails = {
+              mimetype: m.videoMessage.mimetype || 'video/mp4',
+              caption: m.videoMessage.caption || '',
+              seconds: m.videoMessage.seconds || 0
+            };
           } else if (m.audioMessage) {
-            text = '🎵 Mensagem de voz / Áudio';
+            text = '';
             mediaType = 'audio';
+            mediaDetails = {
+              mimetype: m.audioMessage.mimetype || 'audio/ogg; codecs=opus',
+              seconds: m.audioMessage.seconds || 0,
+              ptt: Boolean(m.audioMessage.ptt)
+            };
+          } else if (m.documentMessage) {
+            text = m.documentMessage.caption || '';
+            const fn = m.documentMessage.fileName || m.documentMessage.title || 'Documento';
+            const isVideoDoc = (m.documentMessage.mimetype || '').startsWith('video/') || fn.match(/\.(mp4|mov|avi|mkv)$/i);
+            const isImageDoc = (m.documentMessage.mimetype || '').startsWith('image/') || fn.match(/\.(jpg|jpeg|png|webp|gif)$/i);
+            const isAudioDoc = (m.documentMessage.mimetype || '').startsWith('audio/') || fn.match(/\.(mp3|ogg|wav|m4a|aac)$/i);
+            
+            if (isImageDoc) {
+              mediaType = 'image';
+            } else if (isVideoDoc) {
+              mediaType = 'video';
+            } else if (isAudioDoc) {
+              mediaType = 'audio';
+            } else {
+              mediaType = 'document';
+            }
+
+            mediaDetails = {
+              fileName: fn,
+              mimetype: m.documentMessage.mimetype || 'application/octet-stream',
+              fileLength: m.documentMessage.fileLength?.low || m.documentMessage.fileLength || 0
+            };
           } else if (m.stickerMessage) {
-            text = '🏷️ Figurinha';
+            text = '';
             mediaType = 'sticker';
+            mediaDetails = {
+              mimetype: m.stickerMessage.mimetype || 'image/webp'
+            };
           } else if (typeof msg.content === 'string') {
             text = msg.content;
           }
@@ -561,11 +627,12 @@ function setupIpcHandlers() {
             pushName,
             text,
             mediaType,
+            mediaDetails,
             timestamp,
             status: msg.status || (fromMe ? 'SENT' : 'READ')
           };
         })
-        .filter(m => m.text && m.text.trim().length > 0)
+        .filter(m => (m.text && m.text.trim().length > 0) || m.mediaType)
         .sort((a, b) => a.timestamp - b.timestamp);
 
       return {
@@ -583,9 +650,93 @@ function setupIpcHandlers() {
   });
 
   /**
+   * Cache em memória para mídias baixadas (evita requisições repetidas)
+   */
+  const chatMediaCache = new Map();
+
+  /**
+   * Handler: Obter Mídia em Base64 de uma Mensagem para Visualização / Áudio no Chat
+   */
+  ipcMain.handle('api:get-media-base64', async (_event, { instanceName, messageId }) => {
+    try {
+      validateCredentials();
+      const trimmedName = (instanceName || '').trim();
+      const msgId = String(messageId || '').trim();
+      if (!trimmedName || !msgId) {
+        return { success: false, error: 'Parâmetros incompletos para obter mídia.' };
+      }
+
+      const cacheKey = `${trimmedName}:${msgId}`;
+      if (chatMediaCache.has(cacheKey)) {
+        return { success: true, ...chatMediaCache.get(cacheKey) };
+      }
+
+      const endpoint = `${EVOLUTION_API_URL}/chat/getBase64FromMediaMessage/${encodeURIComponent(trimmedName)}`;
+      const response = await axios.post(
+        endpoint,
+        {
+          message: {
+            key: {
+              id: msgId
+            }
+          },
+          convertToMp4: false
+        },
+        {
+          headers: {
+            apikey: EVOLUTION_API_KEY,
+            'Content-Type': 'application/json'
+          },
+          timeout: 25000
+        }
+      );
+
+      if (response.data && response.data.base64) {
+        const rawBase64 = response.data.base64;
+        const mimetype = response.data.mimetype || 'application/octet-stream';
+        const mediaType = response.data.mediaType || '';
+        const fileName = response.data.fileName || '';
+        
+        const dataUrl = rawBase64.startsWith('data:')
+          ? rawBase64
+          : `data:${mimetype};base64,${rawBase64}`;
+
+        const resultData = {
+          base64: dataUrl,
+          mimetype,
+          mediaType,
+          fileName
+        };
+
+        if (chatMediaCache.size > 80) {
+          const firstKey = chatMediaCache.keys().next().value;
+          chatMediaCache.delete(firstKey);
+        }
+        chatMediaCache.set(cacheKey, resultData);
+
+        return {
+          success: true,
+          ...resultData
+        };
+      }
+
+      return {
+        success: false,
+        error: 'Nenhum base64 retornado para esta mídia.'
+      };
+    } catch (error) {
+      console.warn(`[api:get-media-base64] Erro ao obter mídia ${messageId}:`, error.response?.data || error.message);
+      return {
+        success: false,
+        error: error.response?.data?.message || error.message || 'Falha ao baixar mídia.'
+      };
+    }
+  });
+
+  /**
    * Handler: Enviar Mídia (Imagem, Vídeo, Documento) com Legenda
    */
-  ipcMain.handle('api:send-media', async (_event, { instanceName, number, media, mediatype, mimetype, fileName, caption, delay }) => {
+  ipcMain.handle('api:send-media', async (_event, { instanceName, number, media, mediatype, mimetype, fileName, caption, thumbnail, delay }) => {
     try {
       validateCredentials();
       const trimmedName = (instanceName || '').trim();
@@ -644,11 +795,38 @@ function setupIpcHandlers() {
           }
         }
 
+        const sentAudioId = response.data?.key?.id;
+        if (sentAudioId) {
+          const cacheKey = `${trimmedName}:${sentAudioId}`;
+          const fullAudioDataUrl = String(media).startsWith('data:') ? media : `data:${mimetype || 'audio/ogg; codecs=opus'};base64,${base64Clean}`;
+          chatMediaCache.set(cacheKey, {
+            base64: fullAudioDataUrl,
+            mimetype: mimetype || 'audio/ogg; codecs=opus',
+            mediaType: 'audio',
+            fileName: fileName || 'audio.ogg'
+          });
+        }
+
         console.log(`[api:send-media] Sucesso no envio de áudio PTT para ${formattedNumber}! ID: ${response.data?.key?.id || 'OK'}`);
         return {
           success: true,
           data: response.data
         };
+      }
+
+      // Gera ou obtém thumbnail em alta compatibilidade para o WhatsApp
+      let thumbBase64 = thumbnail ? String(thumbnail).replace(/^data:[^;]+;base64,/, '') : null;
+      if (!thumbBase64 && (mediatype === 'image' || (mimetype && mimetype.startsWith('image/')))) {
+        try {
+          const fullDataUrl = String(media).startsWith('data:') ? media : `data:${mimetype || 'image/jpeg'};base64,${base64Clean}`;
+          const nImg = nativeImage.createFromDataURL(fullDataUrl);
+          if (!nImg.isEmpty()) {
+            const resized = nImg.resize({ width: 72, height: 72, quality: 'good' });
+            thumbBase64 = resized.toJPEG(60).toString('base64');
+          }
+        } catch (thumbErr) {
+          console.warn('Aviso: Não foi possível gerar thumbnail nativo:', thumbErr.message);
+        }
       }
 
       // Envio padrão de Imagem, Vídeo ou Documento
@@ -663,6 +841,11 @@ function setupIpcHandlers() {
         delay: Number(delay) || 1200
       };
 
+      if (thumbBase64) {
+        payload.thumbnail = thumbBase64;
+        payload.jpegThumbnail = thumbBase64;
+      }
+
       console.log(`[api:send-media] Enviando ${mediatype || 'mídia'} para ${formattedNumber} na instância "${trimmedName}"...`);
       const response = await axios.post(endpoint, payload, {
         headers: {
@@ -671,6 +854,19 @@ function setupIpcHandlers() {
         },
         timeout: 45000
       });
+
+      const sentMediaId = response.data?.key?.id;
+      if (sentMediaId) {
+        const cacheKey = `${trimmedName}:${sentMediaId}`;
+        const fullMediaDataUrl = String(media).startsWith('data:') ? media : `data:${mimetype || 'application/octet-stream'};base64,${base64Clean}`;
+        chatMediaCache.set(cacheKey, {
+          base64: fullMediaDataUrl,
+          mimetype: mimetype || 'application/octet-stream',
+          mediaType: mediatype || 'image',
+          fileName: fileName || '',
+          jpegThumbnail: thumbBase64 ? `data:image/jpeg;base64,${thumbBase64}` : null
+        });
+      }
 
       console.log(`[api:send-media] Sucesso no envio de mídia para ${formattedNumber}! ID: ${response.data?.key?.id || 'OK'}`);
       return {
@@ -706,6 +902,29 @@ function setupIpcHandlers() {
       }
       return { success: false, error: 'URL inválida ou insegura.' };
     } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  /**
+   * Handler: Exibir notificação nativa do sistema operacional (Windows)
+   */
+  ipcMain.handle('app:show-notification', async (_event, { title, body } = {}) => {
+    try {
+      if (Notification.isSupported()) {
+        const iconPath = path.join(__dirname, 'build', 'icon.ico');
+        const notif = new Notification({
+          title: title || 'FlashGroup WPP',
+          body: body || '',
+          icon: fs.existsSync(iconPath) ? iconPath : undefined,
+          silent: false
+        });
+        notif.show();
+        return { success: true };
+      }
+      return { success: false, error: 'Notificações não suportadas nesta plataforma.' };
+    } catch (err) {
+      console.warn('Falha ao emitir notificação nativa:', err.message);
       return { success: false, error: err.message };
     }
   });

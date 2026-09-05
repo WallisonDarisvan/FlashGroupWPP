@@ -143,6 +143,8 @@ FGW.handleStartDispatch = async function() {
   FGW.log('INFO', `Iniciando disparos para ${dispatchQueue.length} grupos em ordem aleatória (Fisher-Yates)...`, 'info');
   FGW.log('INFO', `Cadência: ${minDelay}s a ${maxDelay}s | Digitação: ${presenceDelay}ms`, 'info');
 
+  let consecutiveConnectionErrors = 0;
+
   for (let i = 0; i < dispatchQueue.length; i++) {
     if (state.cancelRequested) {
       FGW.log('AVISO', 'Operação de disparos cancelada pelo usuário.', 'warn');
@@ -169,6 +171,7 @@ FGW.handleStartDispatch = async function() {
 
       if (hasActiveMedia) {
         FGW.log('INFO', `[${i + 1}/${dispatchQueue.length}] ${scopeTag} Enviando com mídia (${chosenVariation.media.fileName}) para ${groupIdentifierLabel}...`, 'info');
+        const mediaThumb = chosenVariation.media.thumbnail || (typeof FGW.generateMediaThumbnail === 'function' ? await FGW.generateMediaThumbnail(chosenVariation.media.dataUrl, chosenVariation.media.mediatype) : null);
         result = await window.electronAPI.sendMediaMessage({
           instanceName,
           number: currentGroup.id,
@@ -177,6 +180,7 @@ FGW.handleStartDispatch = async function() {
           mimetype: chosenVariation.media.mimetype,
           fileName: chosenVariation.media.fileName,
           caption: processedText,
+          thumbnail: mediaThumb,
           delay: presenceDelay
         });
       } else {
@@ -191,44 +195,150 @@ FGW.handleStartDispatch = async function() {
       }
 
       if (result.success) {
+        consecutiveConnectionErrors = 0;
         state.stats.success++;
         FGW.updateGroupStatusInDOM(currentGroup.id, 'success');
         FGW.log('SUCESSO', `Mensagem enviada com sucesso para "${currentGroup.subject}".`, 'success');
 
+        const realCampaignMsgId = result.data?.key?.id || ('campaign_' + Date.now() + '_' + Math.random().toString(36).substring(7));
+
+        // Registra evento no Relatório Excel (.csv)
+        if (FGW.recordDispatchEvent) {
+          FGW.recordDispatchEvent({
+            groupName: currentGroup.subject,
+            groupId: currentGroup.id,
+            customId: currentGroup.customId || '',
+            messageText: processedText,
+            mediaType: hasActiveMedia ? (chosenVariation.media?.mediatype || 'Mídia') : 'Texto Puro',
+            mediaFileName: hasActiveMedia ? (chosenVariation.media?.fileName || '') : '',
+            status: 'success',
+            messageId: realCampaignMsgId,
+            errorMessage: ''
+          });
+        }
+
         // Registra e persiste a mensagem no histórico do chat do grupo
         if (FGW.addRealChatMessage) {
-          let mediaIcon = '📷';
-          if (chosenVariation.media?.mediatype === 'audio') mediaIcon = '🎤';
-          else if (chosenVariation.media?.mediatype === 'video') mediaIcon = '🎥';
-          else if (chosenVariation.media?.mediatype === 'document') mediaIcon = '📄';
+          const hasAudio = hasActiveMedia && chosenVariation.media?.mediatype === 'audio';
 
-          const sentText = (hasActiveMedia && chosenVariation.media && chosenVariation.media.fileName)
-            ? (processedText ? `${mediaIcon} ${chosenVariation.media.fileName}\n${processedText}` : `${mediaIcon} ${chosenVariation.media.fileName}`)
-            : processedText;
+          if (hasAudio) {
+            // Adiciona a mensagem de áudio com player interativo
+            FGW.addRealChatMessage(currentGroup.id, {
+              id: realCampaignMsgId,
+              fromMe: true,
+              pushName: 'Você (Disparo)',
+              text: '',
+              mediaType: 'audio',
+              mediaDetails: {
+                fileName: chosenVariation.media.fileName,
+                mimetype: chosenVariation.media.mimetype,
+                seconds: 0,
+                ptt: true
+              },
+              audioSrc: chosenVariation.media.dataUrl,
+              timestamp: Date.now(),
+              status: 'SENT'
+            });
 
-          const realCampaignMsgId = result.data?.key?.id || ('campaign_' + Date.now() + '_' + Math.random().toString(36).substring(7));
-          FGW.addRealChatMessage(currentGroup.id, {
-            id: realCampaignMsgId,
-            fromMe: true,
-            pushName: 'Você (Disparo)',
-            text: sentText,
-            timestamp: Date.now(),
-            status: 'SENT'
-          });
+            // Se houver texto complementar associado na variação
+            if (processedText && processedText.trim()) {
+              FGW.addRealChatMessage(currentGroup.id, {
+                id: 'text_' + realCampaignMsgId,
+                fromMe: true,
+                pushName: 'Você (Disparo)',
+                text: processedText,
+                timestamp: Date.now() + 10,
+                status: 'SENT'
+              });
+            }
+          } else if (hasActiveMedia) {
+            // Imagem, Vídeo ou Documento
+            FGW.addRealChatMessage(currentGroup.id, {
+              id: realCampaignMsgId,
+              fromMe: true,
+              pushName: 'Você (Disparo)',
+              text: processedText || '',
+              mediaType: chosenVariation.media.mediatype,
+              mediaDetails: {
+                fileName: chosenVariation.media.fileName,
+                mimetype: chosenVariation.media.mimetype,
+                jpegThumbnail: chosenVariation.media.mediatype === 'image' ? chosenVariation.media.dataUrl : null
+              },
+              timestamp: Date.now(),
+              status: 'SENT'
+            });
+          } else {
+            // Texto puro
+            FGW.addRealChatMessage(currentGroup.id, {
+              id: realCampaignMsgId,
+              fromMe: true,
+              pushName: 'Você (Disparo)',
+              text: processedText,
+              timestamp: Date.now(),
+              status: 'SENT'
+            });
+          }
         }
       } else {
         state.stats.failed++;
         FGW.updateGroupStatusInDOM(currentGroup.id, 'error');
-        FGW.log('ERRO', `Falha ao enviar para "${currentGroup.subject}": ${result.error}`, 'error');
+        const errMsg = result.error || 'Erro desconhecido';
+        FGW.log('ERRO', `Falha ao enviar para "${currentGroup.subject}": ${errMsg}`, 'error');
+
+        // Registra falha no Relatório Excel (.csv)
+        if (FGW.recordDispatchEvent) {
+          FGW.recordDispatchEvent({
+            groupName: currentGroup.subject,
+            groupId: currentGroup.id,
+            customId: currentGroup.customId || '',
+            messageText: processedText,
+            mediaType: hasActiveMedia ? (chosenVariation.media?.mediatype || 'Mídia') : 'Texto Puro',
+            mediaFileName: hasActiveMedia ? (chosenVariation.media?.fileName || '') : '',
+            status: 'error',
+            messageId: '',
+            errorMessage: errMsg
+          });
+        }
+
+        if (/connection closed|unauthorized|401|404|not connected|desconectad|econnrefused|etimedout/i.test(errMsg)) {
+          consecutiveConnectionErrors++;
+        }
       }
     } catch (err) {
       state.stats.failed++;
       FGW.updateGroupStatusInDOM(currentGroup.id, 'error');
-      FGW.log('ERRO', `Exceção na requisição para "${currentGroup.subject}": ${err.message}`, 'error');
+      const errTxt = err.message || String(err);
+      FGW.log('ERRO', `Exceção na requisição para "${currentGroup.subject}": ${errTxt}`, 'error');
+
+      // Registra falha no Relatório Excel (.csv)
+      if (FGW.recordDispatchEvent) {
+        FGW.recordDispatchEvent({
+          groupName: currentGroup.subject,
+          groupId: currentGroup.id,
+          customId: currentGroup.customId || '',
+          messageText: processedText,
+          mediaType: hasActiveMedia ? (chosenVariation.media?.mediatype || 'Mídia') : 'Texto Puro',
+          mediaFileName: hasActiveMedia ? (chosenVariation.media?.fileName || '') : '',
+          status: 'error',
+          messageId: '',
+          errorMessage: errTxt
+        });
+      }
+
+      if (/connection closed|unauthorized|401|404|not connected|desconectad|econnrefused|etimedout/i.test(errTxt)) {
+        consecutiveConnectionErrors++;
+      }
     }
 
     state.stats.remaining--;
     FGW.updateProgressUI();
+
+    // Proteção de segurança: para a campanha se o WhatsApp/API perder conexão consecutivamente
+    if (consecutiveConnectionErrors >= 3) {
+      FGW.log('ERRO', '⚠️ Alerta de Segurança: 3 falhas consecutivas de conexão com o WhatsApp. Campanha pausada automaticamente para proteger sua conta.', 'error');
+      alert('Campanha pausada automaticamente:\n\nForam detectadas 3 falhas consecutivas de conexão com o WhatsApp. Verifique sua conexão e status do WhatsApp no celular antes de reiniciar.');
+      break;
+    }
 
     if (i < dispatchQueue.length - 1 && !state.cancelRequested) {
       const delaySeconds = Math.floor(Math.random() * (maxDelay - minDelay + 1)) + minDelay;
@@ -240,11 +350,22 @@ FGW.handleStartDispatch = async function() {
   state.isDispatching = false;
   FGW.setExecutionUIState(false);
 
+  // Notificação Nativa do Windows ao Concluir
+  try {
+    const notifTitle = state.cancelRequested ? 'FlashGroup WPP - Disparos Interrompidos' : 'FlashGroup WPP - Campanha Concluída!';
+    const notifBody = `Total: ${state.stats.total} | Enviados com sucesso: ${state.stats.success} | Falhas: ${state.stats.failed}`;
+    if (window.electronAPI?.showNotification) {
+      window.electronAPI.showNotification({ title: notifTitle, body: notifBody });
+    }
+  } catch (notifErr) {
+    console.warn('Notificação nativa:', notifErr);
+  }
+
   if (state.cancelRequested) {
     FGW.log('AVISO', `Disparos interrompidos. Resumo: ${state.stats.success} enviados, ${state.stats.failed} falhas.`, 'warn');
   } else {
     FGW.log('SUCESSO', `Disparos finalizados com sucesso! Total: ${state.stats.total} | Enviados: ${state.stats.success} | Falhas: ${state.stats.failed}`, 'success');
-    alert(`Disparos finalizados!\n\nEnviados: ${state.stats.success}\nFalhas: ${state.stats.failed}\nTotal: ${state.stats.total}`);
+    alert(`Disparos finalizados!\n\nEnviados: ${state.stats.success}\nFalhas: ${state.stats.failed}\nTotal: ${state.stats.total}\n\nVocê pode exportar o Relatório Excel detalhado clicando em "Relatório Excel" no rodapé.`);
   }
 };
 

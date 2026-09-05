@@ -27,6 +27,7 @@ FGW.closeSettingsModal = function() {
   const elements = FGW.elements || {};
   if (elements.settingsModal) {
     elements.settingsModal.classList.add('hidden');
+    if (FGW.stopConnectionStatePolling) FGW.stopConnectionStatePolling();
     if (FGW.saveSettings) FGW.saveSettings();
     if (FGW.updateCampaignSummary) FGW.updateCampaignSummary();
   }

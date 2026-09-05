@@ -124,6 +124,17 @@
         </svg>
         <span>Parar Disparo</span>
       </button>
+
+      <button id="btnExportReport" class="btn btn-secondary btn-dispatch-action btn-disabled" disabled title="Exportar Relatório detalhado dos disparos em Excel (.csv)">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+          <polyline points="14 2 14 8 20 8"/>
+          <line x1="8" y1="13" x2="16" y2="13"/>
+          <line x1="8" y1="17" x2="16" y2="17"/>
+          <polyline points="10 9 9 9 8 9"/>
+        </svg>
+        <span>Relatório Excel</span>
+      </button>
     </div>
   </div>
 
@@ -206,12 +217,11 @@
                 </th>
                 <th class="col-name">Grupo / Identificação</th>
                 <th class="col-participants">Membros</th>
-                <th class="col-msg-custom">Msgs</th>
               </tr>
             </thead>
             <tbody id="groupsTableBody">
               <tr class="empty-row">
-                <td colspan="4">
+                <td colspan="3">
                   <div class="empty-state">
                     <svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" stroke-width="1.5">
                       <circle cx="12" cy="12" r="10"/>
@@ -378,6 +388,25 @@
         <!-- Header da Lista de Variações -->
         <div class="variations-header">
           <span class="variations-title">Variações Alternadas (Anti-Ban)</span>
+          <div class="template-actions-wrap">
+            <button type="button" id="btnExportTemplate" class="btn-tool-template" title="Exportar este conjunto de variações como modelo .fgw">
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="7 10 12 15 17 10"/>
+                <line x1="12" y1="15" x2="12" y2="3"/>
+              </svg>
+              <span>Exportar .fgw</span>
+            </button>
+            <button type="button" id="btnImportTemplate" class="btn-tool-template" title="Importar modelo salvo (.fgw)">
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="17 8 12 3 7 8"/>
+                <line x1="12" y1="3" x2="12" y2="15"/>
+              </svg>
+              <span>Importar .fgw</span>
+            </button>
+            <input type="file" id="inputImportTemplate" accept=".fgw,.json" style="display:none;">
+          </div>
           <span id="variationsCountBadge" class="count-badge warning">0 / mín. 3</span>
         </div>
 
@@ -516,8 +545,7 @@
 
               <div class="active-connection-info">
                 <span class="active-status-tag">✓ Sessão Ativa & Conectada</span>
-                <h3 id="connectedInstanceTitle">zap-disparador</h3>
-                <p>O seu WhatsApp está autenticado e pronto para disparos automáticos.</p>
+                <h3 id="connectedInstanceTitle">---</h3>
               </div>
 
               <div class="active-connection-actions">
@@ -538,7 +566,7 @@
             <div class="connection-settings-controls">
               <div class="form-group">
                 <label for="instanceName">Nome da Instância</label>
-                <input type="text" id="instanceName" placeholder="ex: zap-disparador" value="zap-disparador" spellcheck="false" autocomplete="off">
+                <input type="text" id="instanceName" placeholder="ex: fgw-instancia" value="" spellcheck="false" autocomplete="off">
                 <span class="field-hint">Identificador exclusivo na Evolution API v2</span>
               </div>
 
@@ -760,8 +788,8 @@
       <div class="modal-body">
         <div class="update-info-card">
           <div class="update-info-row">
-            <span class="info-label">Versão Atual Instalada:</span>
-            <strong class="info-val">v1.0.2</strong>
+            <span class="info-label">Versão Instalada</span>
+            <strong class="info-val">v1.0.3</strong>
           </div>
           <div class="update-info-row">
             <span class="info-label">Nova Versão Detectada:</span>
@@ -804,6 +832,27 @@
     </div>
   </div>
 
+  <!-- Modal de Visualização Ampliada de Mídia (Fotos / Vídeos) -->
+  <div id="mediaPreviewModal" class="modal-overlay hidden">
+    <div class="modal-card modal-media-preview">
+      <div class="modal-header">
+        <div class="modal-title-wrap">
+          <div class="modal-icon icon-media-preview">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+              <circle cx="8.5" cy="8.5" r="1.5"/>
+              <polyline points="21 15 16 10 5 21"/>
+            </svg>
+          </div>
+          <h3 id="mediaPreviewTitle">Visualização de Mídia</h3>
+        </div>
+        <button type="button" id="btnCloseMediaPreview" class="btn-close-modal" title="Fechar">&times;</button>
+      </div>
+      <div class="modal-body media-preview-body" id="mediaPreviewContent">
+      </div>
+    </div>
+  </div>
+
   <!-- Módulos da Aplicação -->
   <script src="js/state.js"></script>
   <script src="js/storage.js"></script>
@@ -813,6 +862,8 @@
   <script src="js/groups.js"></script>
   <script src="js/variables.js"></script>
   <script src="js/variations.js"></script>
+  <script src="js/campaign-templates.js"></script>
+  <script src="js/reports.js"></script>
   <script src="js/dispatch.js"></script>
   <script src="app.js"></script>
 </body>

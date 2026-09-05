@@ -5,6 +5,17 @@
 
 window.FGW = window.FGW || {};
 
+FGW.getActiveInstanceName = function() {
+  const elements = FGW.elements || {};
+  return (
+    FGW.state.activeInstanceName ||
+    (elements.connectedInstanceTitle && elements.connectedInstanceTitle.textContent.trim() !== '---' ? elements.connectedInstanceTitle.textContent.trim() : '') ||
+    (elements.instanceName ? elements.instanceName.value.trim() : '') ||
+    localStorage.getItem(FGW.STORAGE_KEYS?.INSTANCE_NAME) ||
+    ''
+  ).trim();
+};
+
 FGW.getCurrentActiveVariationsList = function() {
   const state = FGW.state;
   if (state.activeMessageScope === '__global__') {
@@ -525,7 +536,7 @@ FGW.renderVariations = function() {
 
     // Clique no Card ativa o preview desta variação e foca o textarea se o clique foi no card
     card.addEventListener('click', (e) => {
-      if (e.target.closest('button') || e.target.closest('input') || e.target.closest('.variation-media-preview')) return;
+      if (e.target.closest('button') || e.target.closest('input') || e.target.closest('textarea') || e.target.closest('.variation-media-preview')) return;
       
       const textarea = card.querySelector('textarea');
       if (textarea && e.target !== textarea) {
@@ -541,10 +552,21 @@ FGW.renderVariations = function() {
     elements.variationsList.appendChild(card);
   });
 
-  // Event Listeners dos Textareas (atualizam o preview em tempo real)
+  // Função de auto-redimensionamento para textareas (mantém o texto visível ao colar)
+  const autoResizeTextarea = (el) => {
+    if (!el) return;
+    el.style.height = 'auto';
+    const targetHeight = Math.min(Math.max(el.scrollHeight, 68), 260);
+    el.style.height = targetHeight + 'px';
+  };
+
+  // Event Listeners dos Textareas (atualizam o preview em tempo real com alta performance)
   elements.variationsList.querySelectorAll('textarea').forEach(textarea => {
     // Garante que não esteja bloqueado se não estiver disparando
     textarea.disabled = Boolean(FGW.state.isDispatching);
+
+    // Ajusta a altura inicial do campo com base no texto
+    autoResizeTextarea(textarea);
 
     textarea.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -556,15 +578,29 @@ FGW.renderVariations = function() {
       }
     });
 
+    textarea.addEventListener('paste', () => {
+      setTimeout(() => {
+        autoResizeTextarea(textarea);
+      }, 0);
+    });
+
     textarea.addEventListener('input', (e) => {
       const idx = parseInt(e.target.dataset.index, 10);
       const list = FGW.getCurrentActiveVariationsList();
       if (list[idx]) {
         list[idx].text = e.target.value;
         FGW.state.previewVariationIndex = idx;
-        FGW.saveActiveVariations();
-        FGW.updateVariationsBadge();
-        FGW.updateWhatsAppMobilePreview();
+
+        // Auto-expande imediatamente a altura ao digitar ou colar
+        autoResizeTextarea(e.target);
+
+        // Debounce suave para evitar travamentos de I/O e DOM durante digitação rápida
+        clearTimeout(textarea._saveTimeout);
+        textarea._saveTimeout = setTimeout(() => {
+          FGW.saveActiveVariations();
+          FGW.updateVariationsBadge();
+          FGW.updateWhatsAppMobilePreview();
+        }, 120);
       }
     });
 
@@ -578,6 +614,11 @@ FGW.renderVariations = function() {
     });
 
     textarea.addEventListener('blur', () => {
+      clearTimeout(textarea._saveTimeout);
+      FGW.saveActiveVariations();
+      FGW.updateVariationsBadge();
+      FGW.updateWhatsAppMobilePreview();
+
       if (FGW.state.activeMessageScope !== '__global__') {
         if (FGW.renderGroupsTable) FGW.renderGroupsTable();
         FGW.updateVariationScopeSelectorOptions();
@@ -608,6 +649,45 @@ FGW.renderVariations = function() {
     });
   });
 
+  // Helper para geração rápida de thumbnail de imagens no padrão do WhatsApp
+  if (!FGW.generateMediaThumbnail) {
+    FGW.generateMediaThumbnail = function(dataUrl, mediatype) {
+      return new Promise((resolve) => {
+        if (!dataUrl) return resolve(null);
+        try {
+          if (mediatype === 'image' || String(dataUrl).startsWith('data:image/')) {
+            const img = new Image();
+            img.onload = () => {
+              const canvas = document.createElement('canvas');
+              let w = img.width || 72;
+              let h = img.height || 72;
+              const max = 72;
+              if (w > h) {
+                h = Math.round((h * max) / w);
+                w = max;
+              } else {
+                w = Math.round((w * max) / h);
+                h = max;
+              }
+              canvas.width = Math.max(1, w);
+              canvas.height = Math.max(1, h);
+              const ctx = canvas.getContext('2d');
+              ctx.drawImage(img, 0, 0, w, h);
+              const thumb = canvas.toDataURL('image/jpeg', 0.6);
+              resolve(thumb);
+            };
+            img.onerror = () => resolve(null);
+            img.src = dataUrl;
+          } else {
+            resolve(null);
+          }
+        } catch (e) {
+          resolve(null);
+        }
+      });
+    };
+  }
+
   // File Inputs das Variações
   elements.variationsList.querySelectorAll('.var-file-input').forEach(input => {
     input.addEventListener('change', (e) => {
@@ -625,7 +705,7 @@ FGW.renderVariations = function() {
       }
 
       const reader = new FileReader();
-      reader.onload = () => {
+      reader.onload = async () => {
         const dataUrl = reader.result;
         const sizeFormatted = file.size > 1024 * 1024
           ? `${(file.size / (1024 * 1024)).toFixed(1)} MB`
@@ -636,12 +716,15 @@ FGW.renderVariations = function() {
           list[idx] = { text: '', media: null };
         }
 
+        const thumbnail = await FGW.generateMediaThumbnail(dataUrl, mediatype);
+
         list[idx].media = {
           dataUrl,
           mediatype,
           mimetype: file.type || 'application/octet-stream',
           fileName: file.name,
-          fileSizeStr: sizeFormatted
+          fileSizeStr: sizeFormatted,
+          thumbnail
         };
         list[idx].mediaEnabled = true;
 
@@ -818,12 +901,13 @@ FGW.addRealChatMessage = function(groupId, msg) {
   if (existingIdx >= 0) {
     FGW.state.realMessages[groupId][existingIdx] = { ...FGW.state.realMessages[groupId][existingIdx], ...msg };
   } else {
-    // Evita duplicar se já existir mensagem com mesmo texto, mesmo remetente e timestamp próximo (< 90s)
+    // Evita duplicar se já existir mensagem com mesmo texto/mídia, mesmo remetente e timestamp próximo (< 90s)
     const duplicateIdx = FGW.state.realMessages[groupId].findIndex(m => {
       const sameText = (m.text || '').trim() === (msg.text || '').trim();
+      const sameMedia = Boolean(m.mediaType) && m.mediaType === msg.mediaType;
       const sameFromMe = Boolean(m.fromMe) === Boolean(msg.fromMe);
       const timeDiff = Math.abs((m.timestamp || 0) - (msg.timestamp || 0));
-      return sameText && sameFromMe && timeDiff < 90000;
+      return (sameText || sameMedia) && sameFromMe && timeDiff < 90000;
     });
 
     if (duplicateIdx >= 0) {
@@ -834,19 +918,21 @@ FGW.addRealChatMessage = function(groupId, msg) {
     }
   }
 
-  // Deduplicação geral de segurança
+  // Deduplicação geral de segurança (preserva mensagens de texto OU de mídia/áudio)
   const cleanList = [];
   const seenKeys = new Set();
   FGW.state.realMessages[groupId].forEach(m => {
-    if (!m || !m.text) return;
-    const key = `${m.fromMe ? 'out' : 'in'}_${m.text.trim()}_${Math.floor((m.timestamp || 0) / 45000)}`;
+    if (!m) return;
+    if (!m.text && !m.mediaType) return;
+    const textKey = m.text ? m.text.trim() : (m.mediaType + '_' + (m.mediaDetails?.fileName || m.id || 'media'));
+    const key = m.id ? m.id : `${m.fromMe ? 'out' : 'in'}_${textKey}_${Math.floor((m.timestamp || 0) / 45000)}`;
     if (seenKeys.has(key)) return;
     seenKeys.add(key);
     cleanList.push(m);
   });
 
   // Ordena por timestamp cronológico
-  cleanList.sort((a, b) => a.timestamp - b.timestamp);
+  cleanList.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
   FGW.state.realMessages[groupId] = cleanList;
 
   // Persiste no localStorage permanentemente
@@ -909,11 +995,10 @@ FGW.loadRealChatMessages = async function(targetGroupId, isSilent = false) {
     return;
   }
 
-  const instanceName = FGW.state.activeInstanceName
-    || (elements.connectedInstanceTitle && elements.connectedInstanceTitle.textContent.trim())
-    || (elements.instanceName && elements.instanceName.value.trim())
-    || localStorage.getItem(FGW.STORAGE_KEYS?.INSTANCE_NAME)
-    || 'zapMG';
+  const instanceName = FGW.getActiveInstanceName ? FGW.getActiveInstanceName() : (FGW.state.activeInstanceName || '');
+  if (!instanceName) {
+    return;
+  }
 
   try {
     const res = await window.electronAPI.fetchChatMessages({
@@ -936,28 +1021,41 @@ FGW.loadRealChatMessages = async function(targetGroupId, isSilent = false) {
       res.data.forEach(apiMsg => {
         if (!apiMsg || !apiMsg.id) return;
 
-        // Se existir alguma mensagem temporária local_ com mesmo texto e timestamp próximo, substitui
+        // Se existir alguma mensagem temporária local_/campaign_/var_ com mesmo remetente e timestamp próximo
         for (const [id, localMsg] of msgMap.entries()) {
-          if (String(id).startsWith('local_') &&
-              Boolean(localMsg.fromMe) === Boolean(apiMsg.fromMe) &&
-              (localMsg.text || '').trim() === (apiMsg.text || '').trim() &&
-              Math.abs((localMsg.timestamp || 0) - (apiMsg.timestamp || 0)) < 90000) {
-            msgMap.delete(id);
+          const isTemp = String(id).startsWith('local_') || String(id).startsWith('campaign_') || String(id).startsWith('var_direct_') || String(id).startsWith('text_');
+          if (isTemp && Boolean(localMsg.fromMe) === Boolean(apiMsg.fromMe)) {
+            const sameText = (localMsg.text || '').trim() === (apiMsg.text || '').trim();
+            const sameMedia = Boolean(localMsg.mediaType) && localMsg.mediaType === apiMsg.mediaType;
+            if ((sameText || sameMedia) && Math.abs((localMsg.timestamp || 0) - (apiMsg.timestamp || 0)) < 90000) {
+              if (localMsg.audioSrc && !apiMsg.audioSrc) {
+                apiMsg.audioSrc = localMsg.audioSrc;
+              }
+              msgMap.delete(id);
+            }
           }
+        }
+
+        // Se já tínhamos o audioSrc local nesta mesma mensagem pelo ID, preserva
+        const existingLocal = msgMap.get(apiMsg.id);
+        if (existingLocal && existingLocal.audioSrc && !apiMsg.audioSrc) {
+          apiMsg.audioSrc = existingLocal.audioSrc;
         }
 
         msgMap.set(apiMsg.id, apiMsg);
       });
 
-      // Deduplicação final por chave de conteúdo
+      // Deduplicação final por chave de conteúdo (mantém texto OU mídia/áudio)
       const merged = Array.from(msgMap.values());
       const cleanMerged = [];
       const seenMerged = new Set();
       
       merged.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
       merged.forEach(m => {
-        if (!m || !m.text) return;
-        const k = `${m.fromMe ? 'out' : 'in'}_${m.text.trim()}_${Math.floor((m.timestamp || 0) / 45000)}`;
+        if (!m) return;
+        if (!m.text && !m.mediaType) return;
+        const textKey = m.text ? m.text.trim() : (m.mediaType + '_' + (m.mediaDetails?.fileName || m.id || 'media'));
+        const k = m.id ? m.id : `${m.fromMe ? 'out' : 'in'}_${textKey}_${Math.floor((m.timestamp || 0) / 45000)}`;
         if (seenMerged.has(k)) return;
         seenMerged.add(k);
         cleanMerged.push(m);
@@ -997,10 +1095,23 @@ if (!FGW._chatPollingInterval) {
 /**
  * Renderiza a lista de mensagens reais no chat
  */
+FGW.formatDuration = function(sec) {
+  if (!sec || isNaN(sec) || sec <= 0) return '0:00';
+  const m = Math.floor(sec / 60);
+  const s = String(Math.floor(sec % 60)).padStart(2, '0');
+  return `${m}:${s}`;
+};
+
+/**
+ * Renderiza a lista de mensagens reais no chat com suporte a mídias visuais e audíveis
+ */
 FGW.renderRealMessages = function(messages, groupId) {
   const elements = FGW.elements || {};
   const container = elements.realChatMessagesList;
   if (!container) return;
+
+  // Garante que os listeners de clique de mídia estejam ativos
+  FGW.initChatMediaInteractions();
 
   if (!messages || messages.length === 0) {
     container.innerHTML = `
@@ -1027,11 +1138,94 @@ FGW.renderRealMessages = function(messages, groupId) {
       </span>
     ` : '';
 
+    let mediaHtml = '';
+    const mType = msg.mediaType;
+    const mDet = msg.mediaDetails || {};
+
+    if (mType === 'image') {
+      const initialSrc = mDet.jpegThumbnail || '';
+      mediaHtml = `
+        <div class="wa-chat-img-box ${initialSrc ? '' : 'loading-media'}" data-msg-id="${msg.id}" title="Clique para ampliar a foto">
+          <img class="wa-chat-media-img" src="${initialSrc || 'data:image/svg+xml;utf8,<svg xmlns=\'http://www.w3.org/2000/svg\' width=\'240\' height=\'160\' fill=\'%23111b21\'></svg>'}" alt="Foto" loading="lazy" />
+          <div class="wa-chat-media-loading-overlay">
+            <div class="spinner-media"></div>
+            <span>Carregando foto...</span>
+          </div>
+        </div>
+      `;
+    } else if (mType === 'audio') {
+      const durationStr = FGW.formatDuration(mDet.seconds);
+      const audioSrcAttr = msg.audioSrc ? `data-audio-src="${FGW.escapeHtml(msg.audioSrc)}"` : '';
+      mediaHtml = `
+        <div class="wa-chat-audio-player wa-media-audio-ptt" data-msg-id="${msg.id}" data-seconds="${mDet.seconds || 0}" ${audioSrcAttr}>
+          <div class="wa-ptt-controls-row">
+            <button type="button" class="btn-chat-audio-play wa-ptt-play-btn" title="Ouvir áudio">
+              <svg class="icon-play" viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                <polygon points="5 3 19 12 5 21 5 3"/>
+              </svg>
+              <svg class="icon-pause hidden" viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                <rect x="6" y="4" width="4" height="16"/>
+                <rect x="14" y="4" width="4" height="16"/>
+              </svg>
+              <div class="audio-btn-spinner hidden"></div>
+            </button>
+            <div class="wa-ptt-waveform">
+              <span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span>
+            </div>
+            <div class="wa-ptt-mic-tag">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="#25d366"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.91-3c-.49 0-.9.36-.98.85C16.52 14.2 14.47 16 12 16s-4.52-1.8-4.93-4.15c-.08-.49-.49-.85-.98-.85-.61 0-1.09.54-1 1.14.49 3 2.89 5.35 5.91 5.78V20c0 .55.45 1 1 1s1-.45 1-1v-2.08c3.02-.43 5.42-2.78 5.91-5.78.1-.6-.39-1.14-1-1.14z"/></svg>
+            </div>
+          </div>
+          <div class="wa-ptt-footer-info">
+            <span class="audio-time-label">${durationStr || '0:00'}</span>
+            <span class="wa-ptt-filename">${FGW.escapeHtml(mDet.fileName || 'Mensagem de voz')}</span>
+            <span class="wa-ptt-label-tag">${mDet.ptt ? 'Voz' : 'Áudio'}</span>
+          </div>
+        </div>
+      `;
+    } else if (mType === 'video') {
+      const durationStr = mDet.seconds ? FGW.formatDuration(mDet.seconds) : '';
+      mediaHtml = `
+        <div class="wa-chat-video-box" data-msg-id="${msg.id}" title="Clique para assistir o vídeo">
+          <div class="wa-chat-video-placeholder">
+            <div class="video-play-btn-circle">
+              <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor">
+                <polygon points="5 3 19 12 5 21 5 3"/>
+              </svg>
+            </div>
+            <span class="video-tag">🎥 Vídeo ${durationStr ? `(${durationStr})` : ''}</span>
+          </div>
+        </div>
+      `;
+    } else if (mType === 'document') {
+      const fn = mDet.fileName || msg.text || 'Documento';
+      mediaHtml = `
+        <div class="wa-chat-doc-box" data-msg-id="${msg.id}" title="Clique para abrir ou baixar">
+          <div class="doc-icon">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+              <polyline points="14 2 14 8 20 8"/>
+              <line x1="16" y1="13" x2="8" y2="13"/>
+              <line x1="16" y1="17" x2="8" y2="17"/>
+              <polyline points="10 9 9 9 8 9"/>
+            </svg>
+          </div>
+          <div class="doc-details">
+            <span class="doc-filename">${FGW.escapeHtml(fn)}</span>
+            <span class="doc-action-hint">Abrir arquivo</span>
+          </div>
+        </div>
+      `;
+    }
+
+    const textHtml = (msg.text && msg.text.trim()) ? `<div class="wa-bubble-text">${FGW.formatWhatsAppPreviewText(msg.text)}</div>` : '';
+
     html += `
       <div class="wa-bubble-wrapper ${bubbleClass}">
-        <div class="wa-real-bubble">
+        <div class="wa-real-bubble ${mType ? 'has-media media-' + mType : ''}">
           ${sender}
-          <div class="wa-bubble-text">${FGW.formatWhatsAppPreviewText(msg.text)}</div>
+          ${mediaHtml}
+          ${textHtml}
           <div class="wa-bubble-footer-mini">
             <span>${timeStr}</span>
             ${checkIcon}
@@ -1043,12 +1237,312 @@ FGW.renderRealMessages = function(messages, groupId) {
 
   container.innerHTML = html;
 
+  // Carrega automaticamente as fotos exibidas no chat
+  FGW.autoLoadChatImages(container);
+
   // Rola o chat suavemente até a base
   if (elements.whatsappChatBody) {
     setTimeout(() => {
       elements.whatsappChatBody.scrollTop = elements.whatsappChatBody.scrollHeight;
     }, 50);
   }
+};
+
+/**
+ * Carrega fotos em background para visualização imediata no chat
+ */
+FGW.autoLoadChatImages = function(container) {
+  if (!container) return;
+  const imageBoxes = container.querySelectorAll('.wa-chat-img-box:not(.loaded)');
+  if (imageBoxes.length === 0) return;
+
+  const instanceName = FGW.getActiveInstanceName ? FGW.getActiveInstanceName() : (FGW.state.activeInstanceName || '');
+  if (!instanceName) return;
+
+  imageBoxes.forEach(async (box) => {
+    const msgId = box.dataset.msgId;
+    if (!msgId) return;
+
+    try {
+      const res = await window.electronAPI.getMediaBase64({ instanceName, messageId: msgId });
+      box.classList.remove('loading-media');
+      if (res && res.success && res.base64) {
+        const img = box.querySelector('img');
+        if (img) {
+          img.src = res.base64;
+          box.classList.add('loaded');
+        }
+      }
+    } catch (e) {
+      box.classList.remove('loading-media');
+    }
+  });
+};
+
+/**
+ * Gerenciador de Áudio Ativo no Chat
+ */
+FGW.activeAudio = null;
+FGW.activeAudioWrap = null;
+
+FGW.handlePlayChatAudio = async function(msgId, playerWrap) {
+  const playBtn = playerWrap.querySelector('.btn-chat-audio-play');
+  const iconPlay = playBtn?.querySelector('.icon-play');
+  const iconPause = playBtn?.querySelector('.icon-pause');
+  const spinner = playBtn?.querySelector('.audio-btn-spinner');
+  const timeLabel = playerWrap.querySelector('.audio-time-label');
+  const barFill = playerWrap.querySelector('.audio-progress-fill');
+
+  // Se já está tocando ESTE áudio: alterna pause/play
+  if (FGW.activeAudio && FGW.activeAudioWrap === playerWrap) {
+    if (!FGW.activeAudio.paused) {
+      FGW.activeAudio.pause();
+      iconPlay?.classList.remove('hidden');
+      iconPause?.classList.add('hidden');
+      playerWrap.classList.remove('is-playing');
+    } else {
+      FGW.activeAudio.play();
+      iconPlay?.classList.add('hidden');
+      iconPause?.classList.remove('hidden');
+      playerWrap.classList.add('is-playing');
+    }
+    return;
+  }
+
+  // Se outro áudio estiver tocando, para ele
+  if (FGW.activeAudio) {
+    FGW.activeAudio.pause();
+    if (FGW.activeAudioWrap) {
+      FGW.activeAudioWrap.classList.remove('is-playing');
+      const prevPlay = FGW.activeAudioWrap.querySelector('.icon-play');
+      const prevPause = FGW.activeAudioWrap.querySelector('.icon-pause');
+      prevPlay?.classList.remove('hidden');
+      prevPause?.classList.add('hidden');
+    }
+    FGW.activeAudio = null;
+    FGW.activeAudioWrap = null;
+  }
+
+  // Busca o base64 se ainda não tiver no elemento
+  let audioDataUrl = playerWrap.dataset.audioSrc;
+  if (!audioDataUrl) {
+    iconPlay?.classList.add('hidden');
+    spinner?.classList.remove('hidden');
+
+    const instanceName = FGW.getActiveInstanceName ? FGW.getActiveInstanceName() : (FGW.state.activeInstanceName || '');
+    if (!instanceName) {
+      spinner?.classList.add('hidden');
+      iconPlay?.classList.remove('hidden');
+      alert('Conecte o WhatsApp para reproduzir áudios.');
+      return;
+    }
+
+    try {
+      const res = await window.electronAPI.getMediaBase64({ instanceName, messageId: msgId });
+      spinner?.classList.add('hidden');
+      iconPlay?.classList.remove('hidden');
+
+      if (res && res.success && res.base64) {
+        audioDataUrl = res.base64;
+        playerWrap.dataset.audioSrc = audioDataUrl;
+      } else {
+        alert('Não foi possível carregar o áudio.');
+        return;
+      }
+    } catch (err) {
+      spinner?.classList.add('hidden');
+      iconPlay?.classList.remove('hidden');
+      alert('Erro ao baixar áudio: ' + err.message);
+      return;
+    }
+  }
+
+  // Cria e toca o áudio
+  const audio = new Audio(audioDataUrl);
+  FGW.activeAudio = audio;
+  FGW.activeAudioWrap = playerWrap;
+
+  iconPlay?.classList.add('hidden');
+  iconPause?.classList.remove('hidden');
+  playerWrap.classList.add('is-playing');
+
+  audio.addEventListener('timeupdate', () => {
+    if (audio.duration && !isNaN(audio.duration)) {
+      const pct = (audio.currentTime / audio.duration) * 100;
+      if (barFill) barFill.style.width = `${pct}%`;
+      if (timeLabel) timeLabel.textContent = FGW.formatDuration(audio.currentTime);
+    }
+  });
+
+  audio.addEventListener('ended', () => {
+    iconPlay?.classList.remove('hidden');
+    iconPause?.classList.add('hidden');
+    playerWrap.classList.remove('is-playing');
+    if (barFill) barFill.style.width = '0%';
+    const origSec = Number(playerWrap.dataset.seconds) || 0;
+    if (timeLabel) timeLabel.textContent = FGW.formatDuration(origSec);
+    FGW.activeAudio = null;
+    FGW.activeAudioWrap = null;
+  });
+
+  audio.play().catch(e => {
+    console.warn('Erro ao reproduzir áudio:', e);
+    iconPlay?.classList.remove('hidden');
+    iconPause?.classList.add('hidden');
+    playerWrap.classList.remove('is-playing');
+  });
+};
+
+/**
+ * Abre modal de visualização de foto ou vídeo
+ */
+FGW.openMediaPreviewModal = function(mediaSrc, type, title) {
+  const modal = document.getElementById('mediaPreviewModal');
+  const titleElem = document.getElementById('mediaPreviewTitle');
+  const contentElem = document.getElementById('mediaPreviewContent');
+  if (!modal || !contentElem) return;
+
+  if (titleElem) titleElem.textContent = title || 'Visualização';
+
+  if (type === 'image') {
+    contentElem.innerHTML = `
+      <div class="lightbox-image-wrap">
+        <img src="${mediaSrc}" alt="Foto" class="lightbox-img" />
+      </div>
+    `;
+  } else if (type === 'video') {
+    contentElem.innerHTML = `
+      <div class="lightbox-video-wrap">
+        <video controls autoplay src="${mediaSrc}" class="lightbox-video"></video>
+      </div>
+    `;
+  }
+
+  modal.classList.remove('hidden');
+};
+
+/**
+ * Inicializa os ouvintes de clique interativos de mídias no chat
+ */
+FGW.initChatMediaInteractions = function() {
+  const elements = FGW.elements || {};
+  const container = elements.realChatMessagesList;
+  if (!container || container._mediaInited) return;
+  container._mediaInited = true;
+
+  // Fechamento do modal de mídia
+  const modal = document.getElementById('mediaPreviewModal');
+  const closeBtn = document.getElementById('btnCloseMediaPreview');
+  if (closeBtn && !closeBtn._inited) {
+    closeBtn._inited = true;
+    closeBtn.addEventListener('click', () => modal?.classList.add('hidden'));
+    modal?.addEventListener('click', (e) => {
+      if (e.target === modal) modal.classList.add('hidden');
+    });
+  }
+
+  container.addEventListener('click', async (e) => {
+    // 1. Áudio (Play / Pause)
+    const audioBtn = e.target.closest('.btn-chat-audio-play');
+    if (audioBtn) {
+      e.stopPropagation();
+      const playerWrap = audioBtn.closest('.wa-chat-audio-player');
+      const msgId = playerWrap?.dataset.msgId;
+      if (msgId) {
+        FGW.handlePlayChatAudio(msgId, playerWrap);
+      }
+      return;
+    }
+
+    // 2. Clique em Foto -> Ampliar no Modal
+    const imgBox = e.target.closest('.wa-chat-img-box');
+    if (imgBox) {
+      const img = imgBox.querySelector('img');
+      const msgId = imgBox.dataset.msgId;
+      if (img && img.src && !img.src.startsWith('data:image/svg')) {
+        FGW.openMediaPreviewModal(img.src, 'image', 'Visualização de Imagem');
+      } else if (msgId) {
+        imgBox.classList.add('loading-media');
+        const instanceName = FGW.getActiveInstanceName ? FGW.getActiveInstanceName() : (FGW.state.activeInstanceName || '');
+        if (!instanceName) {
+          imgBox.classList.remove('loading-media');
+          alert('Conecte o WhatsApp para visualizar mídias.');
+          return;
+        }
+        const res = await window.electronAPI.getMediaBase64({ instanceName, messageId: msgId });
+        imgBox.classList.remove('loading-media');
+        if (res && res.success && res.base64) {
+          if (img) img.src = res.base64;
+          FGW.openMediaPreviewModal(res.base64, 'image', 'Visualização de Imagem');
+        }
+      }
+      return;
+    }
+
+    // 3. Clique em Vídeo -> Reproduzir direto no balão
+    const videoBox = e.target.closest('.wa-chat-video-box');
+    if (videoBox) {
+      const msgId = videoBox.dataset.msgId;
+      if (msgId && !videoBox.querySelector('video')) {
+        videoBox.innerHTML = `
+          <div class="video-loading-box">
+            <div class="spinner-media"></div>
+            <span>Carregando vídeo...</span>
+          </div>
+        `;
+        const instanceName = FGW.getActiveInstanceName ? FGW.getActiveInstanceName() : (FGW.state.activeInstanceName || '');
+        if (!instanceName) {
+          videoBox.innerHTML = `<div class="video-error-box"><span>⚠️ Conecte o WhatsApp para ver este vídeo.</span></div>`;
+          return;
+        }
+        const res = await window.electronAPI.getMediaBase64({ instanceName, messageId: msgId });
+        if (res && res.success && res.base64) {
+          videoBox.innerHTML = `
+            <video controls autoplay class="wa-chat-real-video" src="${res.base64}"></video>
+          `;
+        } else {
+          videoBox.innerHTML = `
+            <div class="video-error-box">
+              <span>⚠️ Não foi possível reproduzir este vídeo.</span>
+            </div>
+          `;
+        }
+      }
+      return;
+    }
+
+    // 4. Clique em Documento
+    const docBox = e.target.closest('.wa-chat-doc-box');
+    if (docBox) {
+      const msgId = docBox.dataset.msgId;
+      if (msgId) {
+        docBox.classList.add('loading');
+        const instanceName = FGW.getActiveInstanceName ? FGW.getActiveInstanceName() : (FGW.state.activeInstanceName || '');
+        if (!instanceName) {
+          docBox.classList.remove('loading');
+          alert('Conecte o WhatsApp para abrir este documento.');
+          return;
+        }
+        const res = await window.electronAPI.getMediaBase64({ instanceName, messageId: msgId });
+        docBox.classList.remove('loading');
+        if (res && res.success && res.base64) {
+          if (res.mimetype?.startsWith('image/')) {
+            FGW.openMediaPreviewModal(res.base64, 'image', res.fileName || 'Imagem');
+          } else if (res.mimetype?.startsWith('video/')) {
+            FGW.openMediaPreviewModal(res.base64, 'video', res.fileName || 'Vídeo');
+          } else {
+            const a = document.createElement('a');
+            a.href = res.base64;
+            a.download = res.fileName || 'documento';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+          }
+        }
+      }
+      return;
+    }
+  });
 };
 
 /**
@@ -1070,11 +1564,7 @@ FGW.handleSendRealChatMessage = async function() {
     (elements.connectionStatusBadge && elements.connectionStatusBadge.classList.contains('connected')) ||
     (elements.chatConnectedState && !elements.chatConnectedState.classList.contains('hidden'));
 
-  const instanceName = FGW.state.activeInstanceName
-    || (elements.connectedInstanceTitle && elements.connectedInstanceTitle.textContent.trim())
-    || (elements.instanceName && elements.instanceName.value.trim())
-    || localStorage.getItem(FGW.STORAGE_KEYS?.INSTANCE_NAME)
-    || 'zapMG';
+  const instanceName = FGW.getActiveInstanceName ? FGW.getActiveInstanceName() : (FGW.state.activeInstanceName || '');
 
   if (!isConnected || !instanceName) {
     alert('Conecte o WhatsApp para enviar mensagens reais.');
@@ -1208,6 +1698,7 @@ FGW.handleSendVariationToActiveGroup = async function(variationIndex, btnElement
 
     let result;
     if (hasActiveMedia) {
+      const mediaThumb = item.media.thumbnail || (typeof FGW.generateMediaThumbnail === 'function' ? await FGW.generateMediaThumbnail(item.media.dataUrl, item.media.mediatype) : null);
       result = await window.electronAPI.sendMediaMessage({
         instanceName,
         number: groupId,
@@ -1216,6 +1707,7 @@ FGW.handleSendVariationToActiveGroup = async function(variationIndex, btnElement
         mimetype: item.media.mimetype,
         fileName: item.media.fileName,
         caption: processedText,
+        thumbnail: mediaThumb,
         delay: 500
       });
     } else {
@@ -1229,23 +1721,65 @@ FGW.handleSendVariationToActiveGroup = async function(variationIndex, btnElement
 
     if (result && result.success) {
       const realMsgId = result.data?.key?.id || ('var_direct_' + Date.now());
-      let mediaIcon = '📷';
-      if (item.media?.mediatype === 'audio') mediaIcon = '🎤';
-      else if (item.media?.mediatype === 'video') mediaIcon = '🎥';
-      else if (item.media?.mediatype === 'document') mediaIcon = '📄';
+      const hasAudio = hasActiveMedia && item.media?.mediatype === 'audio';
 
-      const sentText = (hasActiveMedia && item.media?.fileName)
-        ? (processedText ? `${mediaIcon} ${item.media.fileName}\n${processedText}` : `${mediaIcon} ${item.media.fileName}`)
-        : processedText;
+      if (hasAudio) {
+        // Registra o áudio com player interativo
+        FGW.addRealChatMessage(groupId, {
+          id: realMsgId,
+          fromMe: true,
+          pushName: 'Você (Variação)',
+          text: '',
+          mediaType: 'audio',
+          mediaDetails: {
+            fileName: item.media.fileName,
+            mimetype: item.media.mimetype,
+            seconds: 0,
+            ptt: true
+          },
+          audioSrc: item.media.dataUrl,
+          timestamp: Date.now(),
+          status: 'SENT'
+        });
 
-      FGW.addRealChatMessage(groupId, {
-        id: realMsgId,
-        fromMe: true,
-        pushName: 'Você (Variação)',
-        text: sentText,
-        timestamp: Date.now(),
-        status: 'SENT'
-      });
+        // Se houver texto complementar associado à variação
+        if (processedText && processedText.trim()) {
+          FGW.addRealChatMessage(groupId, {
+            id: 'text_' + realMsgId,
+            fromMe: true,
+            pushName: 'Você (Variação)',
+            text: processedText,
+            timestamp: Date.now() + 10,
+            status: 'SENT'
+          });
+        }
+      } else if (hasActiveMedia) {
+        // Imagem, Vídeo ou Documento
+        FGW.addRealChatMessage(groupId, {
+          id: realMsgId,
+          fromMe: true,
+          pushName: 'Você (Variação)',
+          text: processedText || '',
+          mediaType: item.media.mediatype,
+          mediaDetails: {
+            fileName: item.media.fileName,
+            mimetype: item.media.mimetype,
+            jpegThumbnail: item.media.mediatype === 'image' ? item.media.dataUrl : null
+          },
+          timestamp: Date.now(),
+          status: 'SENT'
+        });
+      } else {
+        // Texto Puro
+        FGW.addRealChatMessage(groupId, {
+          id: realMsgId,
+          fromMe: true,
+          pushName: 'Você (Variação)',
+          text: processedText,
+          timestamp: Date.now(),
+          status: 'SENT'
+        });
+      }
 
       FGW.log('SUCESSO', `Variação #${variationIndex + 1} enviada com sucesso para o grupo "${targetName}"!`, 'success');
       if (btnElement) {

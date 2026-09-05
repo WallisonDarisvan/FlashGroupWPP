@@ -163,8 +163,6 @@ FGW.renderGroupsTable = function() {
       <th class="col-name">Grupo / Identificação</th>
       ${dynamicHeadersHtml}
       <th class="col-participants">Membros</th>
-      <th class="col-msg-custom">Mensagens</th>
-      <th class="col-status">Status de Envio</th>
     `;
 
     // Reassocia o listener do masterCheckbox
@@ -179,7 +177,7 @@ FGW.renderGroupsTable = function() {
   if (elements.totalGroupsCounter) elements.totalGroupsCounter.textContent = `(${FGW.state.groups.length} disponíveis)`;
 
   if (filtered.length === 0) {
-    const totalCols = 5 + groupVars.length;
+    const totalCols = 3 + groupVars.length;
     const tr = document.createElement('tr');
     tr.className = 'empty-row';
     const isSelectedTab = FGW.state.groupsFilterMode === 'selected';
@@ -209,14 +207,6 @@ FGW.renderGroupsTable = function() {
     if (isSelected) tr.classList.add('row-selected');
     if (group.id === FGW.state.currentChatGroupId) tr.classList.add('row-chat-focused');
 
-    const statusMap = {
-      pending: '<span class="status-pill pending">Pendente</span>',
-      sending: '<span class="status-pill sending">Enviando...</span>',
-      success: '<span class="status-pill success">✓ Enviado</span>',
-      error: '<span class="status-pill error">✗ Falha</span>'
-    };
-    const statusHtml = statusMap[group.status] || statusMap.pending;
-
     const dynamicCellsHtml = groupVars.map(v => {
       const currentVal = (FGW.state.groupCustomVars[group.id] && FGW.state.groupCustomVars[group.id][v.name]) !== undefined
         ? FGW.state.groupCustomVars[group.id][v.name]
@@ -235,16 +225,6 @@ FGW.renderGroupsTable = function() {
         </td>
       `;
     }).join('');
-
-    const customConfig = FGW.state.groupCustomVariations[group.id];
-    const isCustomActive = customConfig && customConfig.enabled && Array.isArray(customConfig.variations) && customConfig.variations.length > 0;
-    const customCount = (customConfig && customConfig.variations) ? customConfig.variations.length : 0;
-    const msgBtnClass = isCustomActive ? 'btn-group-messages is-custom' : 'btn-group-messages is-default';
-    const msgBtnIcon = isCustomActive ? '💬' : '🌐';
-    const msgBtnText = isCustomActive ? `${customCount} Exclusiva${customCount === 1 ? '' : 's'}` : 'Padrão Geral';
-    const msgBtnTitle = isCustomActive
-      ? `Grupo com ${customCount} mensagem(ns) exclusiva(s) ativa(s). Clique para editar.`
-      : `Grupo utilizando mensagens gerais da campanha. Clique para criar mensagens exclusivas.`;
 
     tr.innerHTML = `
       <td class="col-checkbox">
@@ -283,12 +263,6 @@ FGW.renderGroupsTable = function() {
       </td>
       ${dynamicCellsHtml}
       <td class="col-participants">${group.participantsCount !== null ? group.participantsCount : '-'}</td>
-      <td class="col-msg-custom">
-        <button type="button" class="${msgBtnClass}" data-id="${FGW.escapeHtml(group.id)}" title="${FGW.escapeHtml(msgBtnTitle)}">
-          <span>${msgBtnIcon}</span> ${FGW.escapeHtml(msgBtnText)}
-        </button>
-      </td>
-      <td class="col-status" id="status-cell-${FGW.sanitizeDomId(group.id)}">${statusHtml}</td>
     `;
 
     tr.addEventListener('click', (e) => {
@@ -327,20 +301,7 @@ FGW.renderGroupsTable = function() {
       });
     });
 
-    // Botões de navegação para mensagens individuais por grupo
-    elements.groupsTableBody.querySelectorAll('.btn-group-messages').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        const gId = e.currentTarget.dataset.id;
-        if (gId) {
-          FGW.state.activeMessageScope = gId;
-          if (elements.variationScopeSelector) elements.variationScopeSelector.value = gId;
-          if (FGW.handleScopeChange) FGW.handleScopeChange(gId);
-          FGW.goToStep(3);
-        }
-      });
-    });
-
-    // Inputs de identificação personalizada ({ID do Grupo})
+    // Inputs de identificação personalizada ({ID do Grupo}) com debounce
     elements.groupsTableBody.querySelectorAll('.custom-id-input').forEach(input => {
       input.addEventListener('input', (e) => {
         const id = e.target.dataset.id;
@@ -348,11 +309,15 @@ FGW.renderGroupsTable = function() {
         const grp = FGW.state.groups.find(g => g.id === id);
         if (grp) grp.customId = val;
         FGW.state.groupCustomTags[id] = val;
-        FGW.saveGroupCustomTags();
+
+        clearTimeout(input._saveTimer);
+        input._saveTimer = setTimeout(() => {
+          FGW.saveGroupCustomTags();
+        }, 220);
       });
     });
 
-    // Inputs de variáveis dinâmicas por grupo ({NomeDaVar})
+    // Inputs de variáveis dinâmicas por grupo ({NomeDaVar}) com debounce
     elements.groupsTableBody.querySelectorAll('.custom-var-input').forEach(input => {
       input.addEventListener('input', (e) => {
         const id = e.target.dataset.id;
@@ -363,7 +328,11 @@ FGW.renderGroupsTable = function() {
           FGW.state.groupCustomVars[id] = {};
         }
         FGW.state.groupCustomVars[id][varName] = val;
-        FGW.saveGroupCustomVars();
+
+        clearTimeout(input._saveTimer);
+        input._saveTimer = setTimeout(() => {
+          FGW.saveGroupCustomVars();
+        }, 220);
       });
     });
   }
@@ -371,8 +340,12 @@ FGW.renderGroupsTable = function() {
   FGW.updateMasterCheckboxState();
 };
 
+FGW._searchDebounceTimer = null;
 FGW.handleSearchFilter = function() {
-  FGW.renderGroupsTable();
+  clearTimeout(FGW._searchDebounceTimer);
+  FGW._searchDebounceTimer = setTimeout(() => {
+    FGW.renderGroupsTable();
+  }, 220);
 };
 
 FGW.updateSelectionCounter = function() {

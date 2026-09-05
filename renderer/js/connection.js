@@ -7,7 +7,7 @@ window.FGW = window.FGW || {};
 
 FGW.setConnectionView = function(isConnected, instanceName) {
   const elements = FGW.elements || {};
-  const nameToDisplay = instanceName || (elements.instanceName ? elements.instanceName.value.trim() : '') || 'zap-disparador';
+  const nameToDisplay = instanceName || (elements.instanceName ? elements.instanceName.value.trim() : '') || '';
 
   if (isConnected) {
     FGW.state.connectionStatus = 'connected';
@@ -54,6 +54,9 @@ FGW.onConnectionEstablished = async function(instanceName, forceRefresh = false)
     elements.instanceName.value = activeName;
   }
   FGW.saveSettings();
+  if (FGW.saveInstanceNameToIndexedDB) {
+    await FGW.saveInstanceNameToIndexedDB(activeName);
+  }
 
   // 1. Atualiza visual para Conectado e revela a coluna de Chat
   FGW.setConnectionView(true, activeName);
@@ -210,26 +213,31 @@ FGW.onConnectionEstablished = async function(instanceName, forceRefresh = false)
 FGW.checkActiveConnectionOnStartup = async function() {
   const elements = FGW.elements || {};
 
-  // 1. Carrega o nome da instância salvo especificamente para este aplicativo no IndexedDB
+  // 1. Carrega exclusivamente o nome da instância salvo no IndexedDB desta máquina
   let instanceName = '';
   if (FGW.loadInstanceNameFromIndexedDB) {
     instanceName = await FGW.loadInstanceNameFromIndexedDB();
   }
-  if (!instanceName && elements.instanceName) {
-    instanceName = elements.instanceName.value.trim();
-  }
-  if (elements.instanceName && instanceName) {
-    elements.instanceName.value = instanceName;
-  }
 
+  // Se este computador ainda NÃO possui instância salva no IndexedDB:
+  // Não realiza chamadas à API com nomes de terceiros. Mantém desconectado e gera sugestão exclusiva.
   if (!instanceName) {
-    FGW.setConnectionView(false);
-    FGW.log('INFO', 'Nenhuma instância configurada. Informe o nome da sua instância nas configurações.', 'info');
+    const suggested = FGW.generateMachineInstanceName ? FGW.generateMachineInstanceName() : `fgw-${Math.random().toString(36).substring(2, 7)}`;
+    if (elements.instanceName) {
+      elements.instanceName.value = suggested;
+    }
+    FGW.setConnectionView(false, suggested);
+    FGW.setConnectionStatus('disconnected', 'Desconectado');
+    FGW.log('INFO', `Instância exclusiva gerada para este computador: "${suggested}". Conecte gerando o QR Code.`, 'info');
     return;
   }
 
+  if (elements.instanceName) {
+    elements.instanceName.value = instanceName;
+  }
+
   FGW.setConnectionStatus('loading', 'Verificando conexão...');
-  FGW.log('INFO', `Consultando conexão da instância "${instanceName}" na Evolution API...`, 'info');
+  FGW.log('INFO', `Consultando conexão da instância "${instanceName}" no banco local desta máquina...`, 'info');
 
   try {
     // Consulta ESTRITAMENTE o status desta instância específica
@@ -329,8 +337,18 @@ FGW.showQrLoadingState = function(text) {
 FGW.startConnectionStatePolling = function(instanceName) {
   FGW.stopConnectionStatePolling();
   const elements = FGW.elements || {};
+  let attempts = 0;
+  const maxAttempts = 45; // ~100 segundos (tempo limite padrão para expiração do QR Code)
 
   FGW.state.qrPollingInterval = setInterval(async () => {
+    attempts++;
+    if (attempts > maxAttempts) {
+      FGW.stopConnectionStatePolling();
+      if (elements.qrExpiredOverlay) elements.qrExpiredOverlay.classList.remove('hidden');
+      if (elements.qrStatusLabel) elements.qrStatusLabel.textContent = 'QR Code expirado. Clique em Recarregar para gerar um novo.';
+      return;
+    }
+
     try {
       const stateResult = await window.electronAPI.checkConnectionState({ instanceName });
 
@@ -398,13 +416,27 @@ FGW.handleDeleteInstance = async function() {
     const result = await window.electronAPI.deleteInstance({ instanceName });
 
     if (result.success) {
-      FGW.setConnectionView(false);
-      FGW.log('SUCESSO', `Instância "${instanceName}" foi deslogada e apagada com sucesso!`, 'success');
+      // Apaga obrigatoriamente a instância do IndexedDB deste computador
+      if (FGW.deleteInstanceNameFromIndexedDB) {
+        await FGW.deleteInstanceNameFromIndexedDB();
+      }
 
+      FGW.state.activeInstanceName = '';
       FGW.state.groups = [];
       FGW.state.selectedGroupIds.clear();
       localStorage.removeItem(FGW.STORAGE_KEYS.CACHED_GROUPS);
       localStorage.removeItem(FGW.STORAGE_KEYS.SELECTED_GROUP_IDS);
+      localStorage.removeItem('fgw_cached_instance_name');
+
+      // Gera novo identificador limpo e individual para este computador
+      const nextSuggested = FGW.generateMachineInstanceName ? FGW.generateMachineInstanceName() : `fgw-${Math.random().toString(36).substring(2, 7)}`;
+      if (elements.instanceName) {
+        elements.instanceName.value = nextSuggested;
+      }
+
+      FGW.setConnectionView(false, nextSuggested);
+      FGW.log('SUCESSO', `Instância "${instanceName}" foi deslogada e apagada da Evolution API e do IndexedDB local com sucesso!`, 'success');
+
       if (FGW.renderGroupsTable) FGW.renderGroupsTable();
       if (FGW.updateSelectionCounter) FGW.updateSelectionCounter();
       if (FGW.updateCampaignSummary) FGW.updateCampaignSummary();
@@ -414,7 +446,7 @@ FGW.handleDeleteInstance = async function() {
       if (elements.qrLoadingText) elements.qrLoadingText.textContent = 'Instância apagada. Gere um novo QR Code para reconectar.';
       if (elements.qrStatusLabel) elements.qrStatusLabel.textContent = 'Desconectado.';
 
-      alert(`Instância "${instanceName}" foi desconectada e apagada com sucesso!`);
+      alert(`Instância "${instanceName}" foi desconectada e apagada da Evolution API e da máquina com sucesso!`);
     } else {
       FGW.log('ERRO', `Falha ao apagar instância: ${result.error}`, 'error');
       alert(`Erro ao apagar instância:\n${result.error}`);
