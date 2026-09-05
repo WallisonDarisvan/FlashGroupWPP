@@ -48,6 +48,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   sendMediaMessage: (params) => ipcRenderer.invoke('api:send-media', params),
 
   /**
+   * Envia uma enquete (poll) para um grupo do WhatsApp
+   * @param {Object} params { instanceName, number, name, selectableCount, values, delay }
+   */
+  sendPoll: (params) => ipcRenderer.invoke('api:send-poll', params),
+
+  /**
    * Obtém mídia em base64 de uma mensagem para visualização ou áudio no chat
    * @param {Object} params { instanceName, messageId }
    */

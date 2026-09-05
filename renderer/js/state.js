@@ -16,7 +16,9 @@ FGW.state = {
   customVariables: [], // Lista de variáveis: [{ name: 'Link', type: 'group'|'global', defaultValue: '' }]
   groupCustomVars: {}, // Mapeamento { [groupId]: { [varName]: 'valor' } }
   activeMessageScope: '__global__', // '__global__' ou groupId selecionado
-  groupCustomVariations: {}, // { [groupId]: { enabled: boolean, variations: Array<{ text: string, media: object|null }> } }
+  campaignType: 'messages', // 'messages' ou 'polls' (Modo exclusivo da campanha)
+  pollVariations: [], // Lista de { id: string, name: string, selectableCount: number, values: string[] }
+  previewPollIndex: 0, // Índice da variação de enquete no preview mobile
   messageVariations: [], // Lista geral de { text: string, media: object | null }
   previewVariationIndex: 0, // Índice da variação atualmente exibida no preview mobile
   lastFocusedTextarea: null, // Textarea atualmente ou recentemente focado
@@ -107,6 +109,14 @@ FGW.initElements = function() {
     btnInsertGroupIdTag: document.getElementById('btnInsertGroupIdTag'),
     btnOpenVariablesManager: document.getElementById('btnOpenVariablesManager'),
     dynamicTagsChipsContainer: document.getElementById('dynamicTagsChipsContainer'),
+    // Enquetes & Tipo de Campanha
+    btnCampaignTypeMessages: document.getElementById('btnCampaignTypeMessages'),
+    btnCampaignTypePolls: document.getElementById('btnCampaignTypePolls'),
+    containerMessagesMode: document.getElementById('containerMessagesMode'),
+    containerPollsMode: document.getElementById('containerPollsMode'),
+    pollsList: document.getElementById('pollsList'),
+    btnAddPollVariation: document.getElementById('btnAddPollVariation'),
+    pollsCountBadge: document.getElementById('pollsCountBadge'),
     minDelay: document.getElementById('minDelay'),
     maxDelay: document.getElementById('maxDelay'),
     presenceDelay: document.getElementById('presenceDelay'),
@@ -165,6 +175,7 @@ FGW.initElements = function() {
     variablesListContainer: document.getElementById('variablesListContainer'),
 
     // Etapa 4: Disparo & Resumo
+    summaryCampaignTypeVal: document.getElementById('summaryCampaignTypeVal'),
     summaryGroupsCount: document.getElementById('summaryGroupsCount'),
     summaryVariationsCount: document.getElementById('summaryVariationsCount'),
     summaryIntervalVal: document.getElementById('summaryIntervalVal'),

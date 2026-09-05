@@ -112,10 +112,16 @@ FGW.updateCampaignSummary = function() {
   const state = FGW.state;
   const elements = FGW.elements || {};
   const selectedCount = state.selectedGroupIds ? state.selectedGroupIds.size : 0;
-  const validVariations = FGW.getValidVariations ? FGW.getValidVariations().length : 0;
+  const isPolls = (state.campaignType === 'polls');
+  const validVariations = isPolls
+    ? (FGW.getValidPollVariations ? FGW.getValidPollVariations().length : 0)
+    : (FGW.getValidVariations ? FGW.getValidVariations().length : 0);
   const minDelay = elements.minDelay ? elements.minDelay.value : 20;
   const maxDelay = elements.maxDelay ? elements.maxDelay.value : 50;
 
+  if (elements.summaryCampaignTypeVal) {
+    elements.summaryCampaignTypeVal.textContent = isPolls ? '📊 Enquetes' : '💬 Mensagens';
+  }
   if (elements.summaryGroupsCount) elements.summaryGroupsCount.textContent = selectedCount;
   if (elements.summaryVariationsCount) elements.summaryVariationsCount.textContent = validVariations;
   if (elements.summaryIntervalVal) elements.summaryIntervalVal.textContent = `${minDelay}s - ${maxDelay}s`;

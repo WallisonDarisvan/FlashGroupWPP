@@ -474,6 +474,68 @@ function setupIpcHandlers() {
   });
 
   /**
+   * Handler: Enviar Enquete (Poll) para Grupo
+   */
+  ipcMain.handle('api:send-poll', async (_event, { instanceName, number, name, selectableCount, values, delay }) => {
+    try {
+      validateCredentials();
+      const trimmedName = (instanceName || '').trim();
+      if (!trimmedName || !number || !name || !Array.isArray(values) || values.length < 2) {
+        return { success: false, error: 'Parâmetros incompletos para envio da enquete (mínimo de 2 opções exigidas).' };
+      }
+
+      let formattedNumber = String(number).trim();
+      if (!formattedNumber.endsWith('@g.us') && !formattedNumber.includes('@')) {
+        formattedNumber = `${formattedNumber}@g.us`;
+      }
+
+      const endpoint = `${EVOLUTION_API_URL}/message/sendPoll/${encodeURIComponent(trimmedName)}`;
+      const cleanValues = values.map(v => String(v).trim()).filter(Boolean);
+      if (cleanValues.length < 2) {
+        return { success: false, error: 'A enquete precisa de pelo menos 2 opções válidas preenchidas.' };
+      }
+
+      const payload = {
+        number: formattedNumber,
+        name: String(name).trim(),
+        selectableCount: Math.max(1, parseInt(selectableCount, 10) || 1),
+        values: cleanValues,
+        delay: Number(delay) || 1200
+      };
+
+      console.log(`[api:send-poll] Enviando enquete "${payload.name}" (${payload.values.length} opções) para ${formattedNumber} via "${trimmedName}"...`);
+      const response = await axios.post(endpoint, payload, {
+        headers: {
+          apikey: EVOLUTION_API_KEY,
+          'Content-Type': 'application/json'
+        },
+        timeout: 25000
+      });
+
+      console.log(`[api:send-poll] Sucesso no envio da enquete para ${formattedNumber}! ID: ${response.data?.key?.id || 'OK'}`);
+      return {
+        success: true,
+        data: response.data
+      };
+    } catch (error) {
+      const status = error.response?.status;
+      const responseData = error.response?.data;
+      let errorMsg = error.message;
+
+      if (responseData && typeof responseData === 'object') {
+        errorMsg = responseData.message || responseData.error || JSON.stringify(responseData);
+      }
+
+      console.warn(`[api:send-poll] Falha no envio da enquete para ${number}: ${errorMsg} (HTTP ${status})`);
+      return {
+        success: false,
+        status,
+        error: `Falha no envio da enquete para ${number}: ${errorMsg}`
+      };
+    }
+  });
+
+  /**
    * Handler: Buscar Mensagens Reais de um Chat / Grupo
    */
   ipcMain.handle('api:fetch-messages', async (_event, { instanceName, remoteJid, limit = 30 }) => {

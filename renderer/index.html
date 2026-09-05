@@ -65,6 +65,10 @@
   <div class="top-summary-bar footer-summary-bar">
     <!-- Métricas Compactas da Campanha -->
     <div class="summary-pills-group">
+      <div class="summary-pill" title="Tipo de campanha ativa (Mensagens ou Enquetes)">
+        <span class="pill-label">Modo:</span>
+        <strong id="summaryCampaignTypeVal">💬 Mensagens</strong>
+      </div>
       <div class="summary-pill" title="Grupos selecionados para envio">
         <span class="pill-label">Grupos:</span>
         <strong id="summaryGroupsCount">0</strong>
@@ -336,39 +340,25 @@
            COLUNA 3 (DIREITA - 32%): MENSAGENS E SUAS VARIAÇÕES
            ====================================================================== -->
       <section class="workspace-col col-variations">
-        <!-- Barra de Escopo de Mensagens (Global vs Grupo Específico) -->
-        <div class="col-variations-top">
-          <div class="scope-selector-wrap">
-            <label for="variationScopeSelector">
-              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
-                <circle cx="12" cy="12" r="10"/>
-                <line x1="2" y1="12" x2="22" y2="12"/>
-                <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
-              </svg>
-              <span>Destino:</span>
-            </label>
-            <select id="variationScopeSelector" class="select-styled scope-select">
-              <option value="__global__">🌐 Variações Gerais da Campanha (Todos)</option>
-            </select>
-          </div>
-
-          <div class="scope-group-status-box hidden" id="scopeGroupStatusBox">
-            <label class="switch-control" title="Ativar mensagens exclusivas para este grupo">
-              <input type="checkbox" id="chkEnableGroupCustomVars">
-              <span class="switch-slider"></span>
-              <span class="switch-label">Exclusivas</span>
-            </label>
-            <button type="button" class="btn btn-sm btn-ghost" id="btnCopyGlobalToGroup" title="Copiar mensagens gerais para este grupo">
-              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
-                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
-                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
-              </svg>
-              <span>Copiar</span>
-            </button>
-          </div>
+        <!-- Alternador de Tipo de Campanha: Mensagens vs Enquetes -->
+        <div class="campaign-type-tabs">
+          <button type="button" class="btn-campaign-type active" id="btnCampaignTypeMessages" title="Campanha de mensagens convencionais com texto e mídia">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+            </svg>
+            <span>💬 Mensagens</span>
+          </button>
+          <button type="button" class="btn-campaign-type" id="btnCampaignTypePolls" title="Campanha exclusiva de enquetes do WhatsApp">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="18" y1="20" x2="18" y2="10"/>
+              <line x1="12" y1="20" x2="12" y2="4"/>
+              <line x1="6" y1="20" x2="6" y2="14"/>
+            </svg>
+            <span>📊 Enquetes</span>
+          </button>
         </div>
 
-        <!-- Barra de Variáveis Dinâmicas {Tags} -->
+        <!-- Barra de Variáveis Dinâmicas {Tags} (Compartilhada entre Mensagens e Enquetes) -->
         <div class="tags-helper-bar">
           <div class="tags-bar-left">
             <span class="tag-helper-label">Variáveis:</span>
@@ -385,45 +375,109 @@
           </button>
         </div>
 
-        <!-- Header da Lista de Variações -->
-        <div class="variations-header">
-          <span class="variations-title">Variações Alternadas (Anti-Ban)</span>
-          <div class="template-actions-wrap">
-            <button type="button" id="btnExportTemplate" class="btn-tool-template" title="Exportar este conjunto de variações como modelo .fgw">
-              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                <polyline points="7 10 12 15 17 10"/>
-                <line x1="12" y1="15" x2="12" y2="3"/>
-              </svg>
-              <span>Exportar .fgw</span>
-            </button>
-            <button type="button" id="btnImportTemplate" class="btn-tool-template" title="Importar modelo salvo (.fgw)">
-              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                <polyline points="17 8 12 3 7 8"/>
-                <line x1="12" y1="3" x2="12" y2="15"/>
-              </svg>
-              <span>Importar .fgw</span>
-            </button>
-            <input type="file" id="inputImportTemplate" accept=".fgw,.json" style="display:none;">
+        <!-- ====================================================================
+             MODO MENSAGENS (TEXTO / MÍDIA)
+             ==================================================================== -->
+        <div id="containerMessagesMode" class="campaign-mode-section">
+          <!-- Barra de Escopo de Mensagens (Global vs Grupo Específico) -->
+          <div class="col-variations-top">
+            <div class="scope-selector-wrap">
+              <label for="variationScopeSelector">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="12" cy="12" r="10"/>
+                  <line x1="2" y1="12" x2="22" y2="12"/>
+                  <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+                </svg>
+                <span>Destino:</span>
+              </label>
+              <select id="variationScopeSelector" class="select-styled scope-select">
+                <option value="__global__">🌐 Variações Gerais da Campanha (Todos)</option>
+              </select>
+            </div>
+
+            <div class="scope-group-status-box hidden" id="scopeGroupStatusBox">
+              <label class="switch-control" title="Ativar mensagens exclusivas para este grupo">
+                <input type="checkbox" id="chkEnableGroupCustomVars">
+                <span class="switch-slider"></span>
+                <span class="switch-label">Exclusivas</span>
+              </label>
+              <button type="button" class="btn btn-sm btn-ghost" id="btnCopyGlobalToGroup" title="Copiar mensagens gerais para este grupo">
+                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                </svg>
+                <span>Copiar</span>
+              </button>
+            </div>
           </div>
-          <span id="variationsCountBadge" class="count-badge warning">0 / mín. 3</span>
+
+          <!-- Header da Lista de Variações de Mensagens -->
+          <div class="variations-header">
+            <span class="variations-title">Variações Alternadas (Anti-Ban)</span>
+            <div class="template-actions-wrap">
+              <button type="button" id="btnExportTemplate" class="btn-tool-template" title="Exportar este conjunto de variações como modelo .fgw">
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                  <polyline points="7 10 12 15 17 10"/>
+                  <line x1="12" y1="15" x2="12" y2="3"/>
+                </svg>
+                <span>Exportar .fgw</span>
+              </button>
+              <button type="button" id="btnImportTemplate" class="btn-tool-template" title="Importar modelo salvo (.fgw)">
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                  <polyline points="17 8 12 3 7 8"/>
+                  <line x1="12" y1="3" x2="12" y2="15"/>
+                </svg>
+                <span>Importar .fgw</span>
+              </button>
+              <input type="file" id="inputImportTemplate" accept=".fgw,.json" style="display:none;">
+            </div>
+            <span id="variationsCountBadge" class="count-badge warning">0 / mín. 3</span>
+          </div>
+
+          <!-- Lista de Variações com Scroll Suave -->
+          <div id="variationsList" class="variations-container col-variations-scroll">
+            <!-- Cards dinâmicos injetados via JS -->
+          </div>
+
+          <!-- Botão Adicionar Nova Variação -->
+          <div class="add-variation-wrap">
+            <button id="btnAddVariation" class="btn btn-secondary btn-block">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="12" y1="5" x2="12" y2="19"/>
+                <line x1="5" y1="12" x2="19" y2="12"/>
+              </svg>
+              <span>Adicionar Nova Variação</span>
+            </button>
+          </div>
         </div>
 
-        <!-- Lista de Variações com Scroll Suave -->
-        <div id="variationsList" class="variations-container col-variations-scroll">
-          <!-- Cards dinâmicos injetados via JS -->
-        </div>
+        <!-- ====================================================================
+             MODO ENQUETES (POLLS - ISOLADO)
+             ==================================================================== -->
+        <div id="containerPollsMode" class="campaign-mode-section polls-mode-container hidden">
+          <!-- Header de Enquetes -->
+          <div class="variations-header">
+            <span class="variations-title">Variações de Enquetes (Anti-Ban)</span>
+            <span id="pollsCountBadge" class="count-badge warning">0 / mín. 3</span>
+          </div>
 
-        <!-- Botão Adicionar Nova Variação -->
-        <div class="add-variation-wrap">
-          <button id="btnAddVariation" class="btn btn-secondary btn-block">
-            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
-              <line x1="12" y1="5" x2="12" y2="19"/>
-              <line x1="5" y1="12" x2="19" y2="12"/>
-            </svg>
-            <span>Adicionar Nova Variação</span>
-          </button>
+          <!-- Lista de Enquetes com Scroll Suave -->
+          <div id="pollsList" class="variations-container col-variations-scroll">
+            <!-- Cards de enquete injetados via JS -->
+          </div>
+
+          <!-- Botão Adicionar Nova Enquete -->
+          <div class="add-variation-wrap">
+            <button id="btnAddPollVariation" class="btn btn-secondary btn-block">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="12" y1="5" x2="12" y2="19"/>
+                <line x1="5" y1="12" x2="19" y2="12"/>
+              </svg>
+              <span>+ Adicionar Variação de Enquete</span>
+            </button>
+          </div>
         </div>
       </section>
 
@@ -862,6 +916,7 @@
   <script src="js/groups.js"></script>
   <script src="js/variables.js"></script>
   <script src="js/variations.js"></script>
+  <script src="js/polls.js"></script>
   <script src="js/campaign-templates.js"></script>
   <script src="js/reports.js"></script>
   <script src="js/dispatch.js"></script>

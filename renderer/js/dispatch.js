@@ -92,12 +92,24 @@ FGW.handleStartDispatch = async function() {
   const elements = FGW.elements || {};
   const state = FGW.state;
 
-  const validVariations = FGW.getValidVariations ? FGW.getValidVariations() : [];
-  if (validVariations.length < 3) {
-    alert(`Você possui apenas ${validVariations.length} variação(ões) válida(s). Cadastre pelo menos 3 variações na Etapa 3 antes de disparar!`);
-    FGW.log('AVISO', 'Disparo bloqueado: mínimo de 3 variações de mensagem exigidas.', 'warn');
-    FGW.goToStep(3);
-    return;
+  const isPollsMode = (state.campaignType === 'polls');
+
+  if (isPollsMode) {
+    const validPolls = FGW.getValidPollVariations ? FGW.getValidPollVariations() : [];
+    if (validPolls.length < 3) {
+      alert(`Você possui apenas ${validPolls.length} variação(ões) de enquete válida(s). Cadastre pelo menos 3 variações de enquete na Etapa 3 antes de disparar!`);
+      FGW.log('AVISO', 'Disparo bloqueado: mínimo de 3 variações de enquete exigidas.', 'warn');
+      FGW.goToStep(3);
+      return;
+    }
+  } else {
+    const validVariations = FGW.getValidVariations ? FGW.getValidVariations() : [];
+    if (validVariations.length < 3) {
+      alert(`Você possui apenas ${validVariations.length} variação(ões) válida(s). Cadastre pelo menos 3 variações na Etapa 3 antes de disparar!`);
+      FGW.log('AVISO', 'Disparo bloqueado: mínimo de 3 variações de mensagem exigidas.', 'warn');
+      FGW.goToStep(3);
+      return;
+    }
   }
 
   if (state.selectedGroupIds.size === 0) {
@@ -140,7 +152,8 @@ FGW.handleStartDispatch = async function() {
   FGW.updateProgressUI();
   FGW.setExecutionUIState(true);
 
-  FGW.log('INFO', `Iniciando disparos para ${dispatchQueue.length} grupos em ordem aleatória (Fisher-Yates)...`, 'info');
+  const campaignLabel = isPollsMode ? 'ENQUETES WHATSAPP' : 'MENSAGENS';
+  FGW.log('INFO', `Iniciando campanha de [${campaignLabel}] para ${dispatchQueue.length} grupos em ordem aleatória (Fisher-Yates)...`, 'info');
   FGW.log('INFO', `Cadência: ${minDelay}s a ${maxDelay}s | Digitação: ${presenceDelay}ms`, 'info');
 
   let consecutiveConnectionErrors = 0;
@@ -154,135 +167,188 @@ FGW.handleStartDispatch = async function() {
     const currentGroup = dispatchQueue[i];
     FGW.updateGroupStatusInDOM(currentGroup.id, 'sending');
 
-    const groupVarsData = FGW.getVariationsForGroup(currentGroup);
-    const pool = groupVarsData.variations;
-    const chosenVariation = pool[Math.floor(Math.random() * pool.length)];
-    const processedText = FGW.applyDynamicTags(chosenVariation.text, currentGroup);
-    const scopeTag = groupVarsData.isCustom ? '[EXCLUSIVA DO GRUPO]' : '[PADRÃO GERAL]';
     const groupIdentifierLabel = (currentGroup.customId && currentGroup.customId.trim())
       ? `"${currentGroup.subject}" [ID/Nome: ${currentGroup.customId.trim()}]`
       : `"${currentGroup.subject}"`;
 
+    let result;
+    let pollPayload = null;
+    let chosenVariation = null;
+    let processedText = '';
+    let hasActiveMedia = false;
+
     try {
-      let result;
+      if (isPollsMode) {
+        // ================================================================
+        // DISPARO EXCLUSIVO DE ENQUETE (SEM MISTURAR)
+        // ================================================================
+        const validPolls = FGW.getValidPollVariations ? FGW.getValidPollVariations() : [];
+        const chosenPoll = validPolls[Math.floor(Math.random() * validPolls.length)];
+        pollPayload = FGW.applyDynamicTagsToPoll(chosenPoll, currentGroup);
 
-      // Disparo com Mídia ou Texto Puro (respeitando a chave individual de mídia)
-      const hasActiveMedia = Boolean(chosenVariation.media && chosenVariation.media.dataUrl && chosenVariation.mediaEnabled !== false);
+        FGW.log('INFO', `[${i + 1}/${dispatchQueue.length}] [ENQUETE] Enviando enquete "${pollPayload.name}" (${pollPayload.values.length} opções) para ${groupIdentifierLabel}...`, 'info');
 
-      if (hasActiveMedia) {
-        FGW.log('INFO', `[${i + 1}/${dispatchQueue.length}] ${scopeTag} Enviando com mídia (${chosenVariation.media.fileName}) para ${groupIdentifierLabel}...`, 'info');
-        const mediaThumb = chosenVariation.media.thumbnail || (typeof FGW.generateMediaThumbnail === 'function' ? await FGW.generateMediaThumbnail(chosenVariation.media.dataUrl, chosenVariation.media.mediatype) : null);
-        result = await window.electronAPI.sendMediaMessage({
+        result = await window.electronAPI.sendPoll({
           instanceName,
           number: currentGroup.id,
-          media: chosenVariation.media.dataUrl,
-          mediatype: chosenVariation.media.mediatype,
-          mimetype: chosenVariation.media.mimetype,
-          fileName: chosenVariation.media.fileName,
-          caption: processedText,
-          thumbnail: mediaThumb,
+          name: pollPayload.name,
+          selectableCount: pollPayload.selectableCount,
+          values: pollPayload.values,
           delay: presenceDelay
         });
       } else {
-        const sendNote = (chosenVariation.media && chosenVariation.mediaEnabled === false) ? ' [Mídia pausada: enviando apenas texto]' : '';
-        FGW.log('INFO', `[${i + 1}/${dispatchQueue.length}] ${scopeTag} Enviando mensagem de texto para ${groupIdentifierLabel}${sendNote}...`, 'info');
-        result = await window.electronAPI.sendMessage({
-          instanceName,
-          number: currentGroup.id,
-          text: processedText,
-          delay: presenceDelay
-        });
+        // ================================================================
+        // DISPARO EXCLUSIVO DE MENSAGENS (TEXTO / MÍDIA)
+        // ================================================================
+        const groupVarsData = FGW.getVariationsForGroup(currentGroup);
+        const pool = groupVarsData.variations;
+        chosenVariation = pool[Math.floor(Math.random() * pool.length)];
+        processedText = FGW.applyDynamicTags(chosenVariation.text, currentGroup);
+        const scopeTag = groupVarsData.isCustom ? '[EXCLUSIVA DO GRUPO]' : '[PADRÃO GERAL]';
+
+        hasActiveMedia = Boolean(chosenVariation.media && chosenVariation.media.dataUrl && chosenVariation.mediaEnabled !== false);
+
+        if (hasActiveMedia) {
+          FGW.log('INFO', `[${i + 1}/${dispatchQueue.length}] ${scopeTag} Enviando com mídia (${chosenVariation.media.fileName}) para ${groupIdentifierLabel}...`, 'info');
+          const mediaThumb = chosenVariation.media.thumbnail || (typeof FGW.generateMediaThumbnail === 'function' ? await FGW.generateMediaThumbnail(chosenVariation.media.dataUrl, chosenVariation.media.mediatype) : null);
+          result = await window.electronAPI.sendMediaMessage({
+            instanceName,
+            number: currentGroup.id,
+            media: chosenVariation.media.dataUrl,
+            mediatype: chosenVariation.media.mediatype,
+            mimetype: chosenVariation.media.mimetype,
+            fileName: chosenVariation.media.fileName,
+            caption: processedText,
+            thumbnail: mediaThumb,
+            delay: presenceDelay
+          });
+        } else {
+          const sendNote = (chosenVariation.media && chosenVariation.mediaEnabled === false) ? ' [Mídia pausada: enviando apenas texto]' : '';
+          FGW.log('INFO', `[${i + 1}/${dispatchQueue.length}] ${scopeTag} Enviando mensagem de texto para ${groupIdentifierLabel}${sendNote}...`, 'info');
+          result = await window.electronAPI.sendMessage({
+            instanceName,
+            number: currentGroup.id,
+            text: processedText,
+            delay: presenceDelay
+          });
+        }
       }
 
-      if (result.success) {
+      if (result && result.success) {
         consecutiveConnectionErrors = 0;
         state.stats.success++;
         FGW.updateGroupStatusInDOM(currentGroup.id, 'success');
-        FGW.log('SUCESSO', `Mensagem enviada com sucesso para "${currentGroup.subject}".`, 'success');
+
+        if (isPollsMode) {
+          FGW.log('SUCESSO', `Enquete enviada com sucesso para "${currentGroup.subject}".`, 'success');
+        } else {
+          FGW.log('SUCESSO', `Mensagem enviada com sucesso para "${currentGroup.subject}".`, 'success');
+        }
 
         const realCampaignMsgId = result.data?.key?.id || ('campaign_' + Date.now() + '_' + Math.random().toString(36).substring(7));
 
         // Registra evento no Relatório Excel (.csv)
         if (FGW.recordDispatchEvent) {
-          FGW.recordDispatchEvent({
-            groupName: currentGroup.subject,
-            groupId: currentGroup.id,
-            customId: currentGroup.customId || '',
-            messageText: processedText,
-            mediaType: hasActiveMedia ? (chosenVariation.media?.mediatype || 'Mídia') : 'Texto Puro',
-            mediaFileName: hasActiveMedia ? (chosenVariation.media?.fileName || '') : '',
-            status: 'success',
-            messageId: realCampaignMsgId,
-            errorMessage: ''
-          });
+          if (isPollsMode) {
+            FGW.recordDispatchEvent({
+              groupName: currentGroup.subject,
+              groupId: currentGroup.id,
+              customId: currentGroup.customId || '',
+              messageText: `[ENQUETE] ${pollPayload.name} | Opções: ${pollPayload.values.join('; ')}`,
+              mediaType: 'Enquete',
+              mediaFileName: `${pollPayload.selectableCount > 1 ? 'Múltipla Escolha' : 'Voto Único'} (${pollPayload.values.length} opções)`,
+              status: 'success',
+              messageId: realCampaignMsgId,
+              errorMessage: ''
+            });
+          } else {
+            FGW.recordDispatchEvent({
+              groupName: currentGroup.subject,
+              groupId: currentGroup.id,
+              customId: currentGroup.customId || '',
+              messageText: processedText,
+              mediaType: hasActiveMedia ? (chosenVariation.media?.mediatype || 'Mídia') : 'Texto Puro',
+              mediaFileName: hasActiveMedia ? (chosenVariation.media?.fileName || '') : '',
+              status: 'success',
+              messageId: realCampaignMsgId,
+              errorMessage: ''
+            });
+          }
         }
 
-        // Registra e persiste a mensagem no histórico do chat do grupo
+        // Registra no histórico do chat do grupo
         if (FGW.addRealChatMessage) {
-          const hasAudio = hasActiveMedia && chosenVariation.media?.mediatype === 'audio';
-
-          if (hasAudio) {
-            // Adiciona a mensagem de áudio com player interativo
+          if (isPollsMode) {
             FGW.addRealChatMessage(currentGroup.id, {
               id: realCampaignMsgId,
               fromMe: true,
-              pushName: 'Você (Disparo)',
-              text: '',
-              mediaType: 'audio',
-              mediaDetails: {
-                fileName: chosenVariation.media.fileName,
-                mimetype: chosenVariation.media.mimetype,
-                seconds: 0,
-                ptt: true
-              },
-              audioSrc: chosenVariation.media.dataUrl,
-              timestamp: Date.now(),
-              status: 'SENT'
-            });
-
-            // Se houver texto complementar associado na variação
-            if (processedText && processedText.trim()) {
-              FGW.addRealChatMessage(currentGroup.id, {
-                id: 'text_' + realCampaignMsgId,
-                fromMe: true,
-                pushName: 'Você (Disparo)',
-                text: processedText,
-                timestamp: Date.now() + 10,
-                status: 'SENT'
-              });
-            }
-          } else if (hasActiveMedia) {
-            // Imagem, Vídeo ou Documento
-            FGW.addRealChatMessage(currentGroup.id, {
-              id: realCampaignMsgId,
-              fromMe: true,
-              pushName: 'Você (Disparo)',
-              text: processedText || '',
-              mediaType: chosenVariation.media.mediatype,
-              mediaDetails: {
-                fileName: chosenVariation.media.fileName,
-                mimetype: chosenVariation.media.mimetype,
-                jpegThumbnail: chosenVariation.media.mediatype === 'image' ? chosenVariation.media.dataUrl : null
-              },
+              pushName: 'Você (Enquete)',
+              text: `📊 ${pollPayload.name}\n${pollPayload.values.map(opt => `• ${opt}`).join('\n')}`,
               timestamp: Date.now(),
               status: 'SENT'
             });
           } else {
-            // Texto puro
-            FGW.addRealChatMessage(currentGroup.id, {
-              id: realCampaignMsgId,
-              fromMe: true,
-              pushName: 'Você (Disparo)',
-              text: processedText,
-              timestamp: Date.now(),
-              status: 'SENT'
-            });
+            const hasAudio = hasActiveMedia && chosenVariation.media?.mediatype === 'audio';
+
+            if (hasAudio) {
+              FGW.addRealChatMessage(currentGroup.id, {
+                id: realCampaignMsgId,
+                fromMe: true,
+                pushName: 'Você (Disparo)',
+                text: '',
+                mediaType: 'audio',
+                mediaDetails: {
+                  fileName: chosenVariation.media.fileName,
+                  mimetype: chosenVariation.media.mimetype,
+                  seconds: 0,
+                  ptt: true
+                },
+                audioSrc: chosenVariation.media.dataUrl,
+                timestamp: Date.now(),
+                status: 'SENT'
+              });
+
+              if (processedText && processedText.trim()) {
+                FGW.addRealChatMessage(currentGroup.id, {
+                  id: 'text_' + realCampaignMsgId,
+                  fromMe: true,
+                  pushName: 'Você (Disparo)',
+                  text: processedText,
+                  timestamp: Date.now() + 10,
+                  status: 'SENT'
+                });
+              }
+            } else if (hasActiveMedia) {
+              FGW.addRealChatMessage(currentGroup.id, {
+                id: realCampaignMsgId,
+                fromMe: true,
+                pushName: 'Você (Disparo)',
+                text: processedText || '',
+                mediaType: chosenVariation.media.mediatype,
+                mediaDetails: {
+                  fileName: chosenVariation.media.fileName,
+                  mimetype: chosenVariation.media.mimetype,
+                  jpegThumbnail: chosenVariation.media.mediatype === 'image' ? chosenVariation.media.dataUrl : null
+                },
+                timestamp: Date.now(),
+                status: 'SENT'
+              });
+            } else {
+              FGW.addRealChatMessage(currentGroup.id, {
+                id: realCampaignMsgId,
+                fromMe: true,
+                pushName: 'Você (Disparo)',
+                text: processedText,
+                timestamp: Date.now(),
+                status: 'SENT'
+              });
+            }
           }
         }
       } else {
         state.stats.failed++;
         FGW.updateGroupStatusInDOM(currentGroup.id, 'error');
-        const errMsg = result.error || 'Erro desconhecido';
+        const errMsg = result?.error || 'Erro desconhecido';
         FGW.log('ERRO', `Falha ao enviar para "${currentGroup.subject}": ${errMsg}`, 'error');
 
         // Registra falha no Relatório Excel (.csv)
@@ -291,9 +357,9 @@ FGW.handleStartDispatch = async function() {
             groupName: currentGroup.subject,
             groupId: currentGroup.id,
             customId: currentGroup.customId || '',
-            messageText: processedText,
-            mediaType: hasActiveMedia ? (chosenVariation.media?.mediatype || 'Mídia') : 'Texto Puro',
-            mediaFileName: hasActiveMedia ? (chosenVariation.media?.fileName || '') : '',
+            messageText: isPollsMode ? `[ENQUETE] ${pollPayload?.name || ''}` : processedText,
+            mediaType: isPollsMode ? 'Enquete' : (hasActiveMedia ? (chosenVariation?.media?.mediatype || 'Mídia') : 'Texto Puro'),
+            mediaFileName: isPollsMode ? 'Enquete WhatsApp' : (hasActiveMedia ? (chosenVariation?.media?.fileName || '') : ''),
             status: 'error',
             messageId: '',
             errorMessage: errMsg
@@ -316,9 +382,9 @@ FGW.handleStartDispatch = async function() {
           groupName: currentGroup.subject,
           groupId: currentGroup.id,
           customId: currentGroup.customId || '',
-          messageText: processedText,
-          mediaType: hasActiveMedia ? (chosenVariation.media?.mediatype || 'Mídia') : 'Texto Puro',
-          mediaFileName: hasActiveMedia ? (chosenVariation.media?.fileName || '') : '',
+          messageText: isPollsMode ? `[ENQUETE] ${pollPayload?.name || ''}` : processedText,
+          mediaType: isPollsMode ? 'Enquete' : (hasActiveMedia ? (chosenVariation?.media?.mediatype || 'Mídia') : 'Texto Puro'),
+          mediaFileName: isPollsMode ? 'Enquete WhatsApp' : (hasActiveMedia ? (chosenVariation?.media?.fileName || '') : ''),
           status: 'error',
           messageId: '',
           errorMessage: errTxt
@@ -352,7 +418,9 @@ FGW.handleStartDispatch = async function() {
 
   // Notificação Nativa do Windows ao Concluir
   try {
-    const notifTitle = state.cancelRequested ? 'FlashGroup WPP - Disparos Interrompidos' : 'FlashGroup WPP - Campanha Concluída!';
+    const notifTitle = state.cancelRequested 
+      ? `FlashGroup WPP - Disparo de ${isPollsMode ? 'Enquetes' : 'Mensagens'} Interrompido` 
+      : `FlashGroup WPP - Campanha de ${isPollsMode ? 'Enquetes' : 'Mensagens'} Concluída!`;
     const notifBody = `Total: ${state.stats.total} | Enviados com sucesso: ${state.stats.success} | Falhas: ${state.stats.failed}`;
     if (window.electronAPI?.showNotification) {
       window.electronAPI.showNotification({ title: notifTitle, body: notifBody });

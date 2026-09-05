@@ -12,11 +12,19 @@ FGW.insertTagIntoActiveTextarea = function(tagName) {
   const allTextareas = elements.variationsList ? elements.variationsList.querySelectorAll('textarea') : [];
 
   if (!target || !document.body.contains(target)) {
-    if (allTextareas.length > 0) {
-      target = allTextareas[0];
+    if (state.campaignType === 'polls') {
+      const pollList = document.getElementById('pollsList');
+      const pollInputs = pollList ? pollList.querySelectorAll('.poll-question-input, .poll-option-input') : [];
+      if (pollInputs.length > 0) {
+        target = pollInputs[0];
+      }
     } else {
-      if (FGW.handleAddVariation) FGW.handleAddVariation();
-      target = elements.variationsList ? elements.variationsList.querySelector('textarea') : null;
+      if (allTextareas.length > 0) {
+        target = allTextareas[0];
+      } else {
+        if (FGW.handleAddVariation) FGW.handleAddVariation();
+        target = elements.variationsList ? elements.variationsList.querySelector('textarea') : null;
+      }
     }
   }
 

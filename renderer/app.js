@@ -434,6 +434,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   FGW.setupEventListeners();
   FGW.setupAutoUpdateUI();
+  if (FGW.initPolls) FGW.initPolls();
 
   // Se existirem grupos previamente selecionados, inicia diretamente na aba de selecionados
   if (FGW.state.selectedGroupIds && FGW.state.selectedGroupIds.size > 0) {
