@@ -60,8 +60,8 @@ Aplicação desktop profissional desenvolvida com **Electron**, **Node.js** e in
 ### 1. Configurar o arquivo `.env`
 O arquivo `.env` na raiz já contém as credenciais configuradas:
 ```env
-EVOLUTION_API_URL=https://meus-evolution-api.8bzkpj.easypanel.host
-EVOLUTION_API_KEY=429683C4C977415CAAFCCE10F7D57F15
+EVOLUTION_API_URL=https://SUAURL
+EVOLUTION_API_KEY=SUAKEYGLOBAL
 ```
 
 ### 2. Iniciar a aplicação
