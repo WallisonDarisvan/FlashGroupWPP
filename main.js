@@ -4,6 +4,52 @@ const path = require('path');
 const fs = require('fs');
 const axios = require('axios');
 
+// Padroniza o nome da aplicação e o diretório de dados em disco (sobrevive a updates e reinstalações)
+app.name = 'FlashGroup WPP';
+const userDataPath = path.join(app.getPath('appData'), 'FlashGroup WPP');
+try {
+  app.setPath('userData', userDataPath);
+} catch (e) {
+  console.warn('[main] Não foi possível definir userData customizado:', e.message);
+}
+
+const configFilePath = path.join(userDataPath, 'session_config.json');
+
+function getPersistentConfigSync() {
+  try {
+    if (fs.existsSync(configFilePath)) {
+      const content = fs.readFileSync(configFilePath, 'utf8');
+      return JSON.parse(content);
+    }
+    // Fallback: busca na pasta legada se existir
+    const legacyPath = path.join(app.getPath('appData'), 'flash-group-wpp', 'session_config.json');
+    if (fs.existsSync(legacyPath)) {
+      const content = fs.readFileSync(legacyPath, 'utf8');
+      const data = JSON.parse(content);
+      savePersistentConfigSync(data);
+      return data;
+    }
+  } catch (err) {
+    console.warn('[main] Erro ao ler session_config.json:', err.message);
+  }
+  return {};
+}
+
+function savePersistentConfigSync(data) {
+  try {
+    if (!fs.existsSync(userDataPath)) {
+      fs.mkdirSync(userDataPath, { recursive: true });
+    }
+    const current = getPersistentConfigSync();
+    const merged = { ...current, ...data, updatedAt: new Date().toISOString() };
+    fs.writeFileSync(configFilePath, JSON.stringify(merged, null, 2), 'utf8');
+    return true;
+  } catch (err) {
+    console.warn('[main] Erro ao salvar session_config.json:', err.message);
+    return false;
+  }
+}
+
 // Garante carregamento do .env tanto em desenvolvimento quanto no app empacotado (.exe)
 const envCandidates = [
   path.join(process.resourcesPath || '', '.env'),
@@ -1065,6 +1111,20 @@ function setupIpcHandlers() {
       console.warn('Falha ao emitir notificação nativa:', err.message);
       return { success: false, error: err.message };
     }
+  });
+
+  /**
+   * Handler: Obter Configuração Persistente em Arquivo de Disco (Sobrevive a Updates)
+   */
+  ipcMain.handle('app:get-persistent-config', () => {
+    return getPersistentConfigSync();
+  });
+
+  /**
+   * Handler: Salvar Configuração Persistente em Arquivo de Disco
+   */
+  ipcMain.handle('app:save-persistent-config', (_event, data) => {
+    return savePersistentConfigSync(data);
   });
 }
 

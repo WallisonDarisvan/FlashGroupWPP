@@ -97,5 +97,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
    */
   onUpdateEvent: (callback) => {
     ipcRenderer.on('app:update-event', (_event, data) => callback(data));
-  }
+  },
+
+  /**
+   * Obtém configuração física salva no disco (session_config.json)
+   */
+  getPersistentConfig: () => ipcRenderer.invoke('app:get-persistent-config'),
+
+  /**
+   * Salva configuração física no disco (session_config.json)
+   * @param {Object} data
+   */
+  savePersistentConfig: (data) => ipcRenderer.invoke('app:save-persistent-config', data)
 });

@@ -120,17 +120,69 @@ FGW.saveInstanceNameToIndexedDB = async function(instanceName) {
   const name = (instanceName || '').trim();
   if (!name) return;
   try { localStorage.setItem(FGW.STORAGE_KEYS.INSTANCE_NAME, name); } catch (e) {}
+
+  // Salva no arquivo físico persistente em disco (sobrevive a updates e reinstalações)
+  if (window.electronAPI && window.electronAPI.savePersistentConfig) {
+    try {
+      await window.electronAPI.savePersistentConfig({ instanceName: name });
+    } catch (err) {
+      console.warn('[Storage] Falha ao salvar no disco:', err);
+    }
+  }
+
   return FGW.saveToIndexedDB('instanceName', name);
 };
 
 FGW.loadInstanceNameFromIndexedDB = async function() {
+  // 1. Tenta carregar do arquivo físico persistente no disco (sobrevive a updates e reinstalações)
+  if (window.electronAPI && window.electronAPI.getPersistentConfig) {
+    try {
+      const diskConfig = await window.electronAPI.getPersistentConfig();
+      if (diskConfig && diskConfig.instanceName && diskConfig.instanceName.trim()) {
+        const diskName = diskConfig.instanceName.trim();
+        try { localStorage.setItem(FGW.STORAGE_KEYS.INSTANCE_NAME, diskName); } catch (e) {}
+        FGW.saveToIndexedDB('instanceName', diskName).catch(() => {});
+        return diskName;
+      }
+    } catch (err) {
+      console.warn('[Storage] Falha ao carregar do disco:', err);
+    }
+  }
+
+  // 2. Fallback para IndexedDB
   const idbVal = await FGW.loadFromIndexedDB('instanceName');
-  if (idbVal) return idbVal;
-  return localStorage.getItem(FGW.STORAGE_KEYS.INSTANCE_NAME) || '';
+  if (idbVal && String(idbVal).trim()) {
+    const cleanIdb = String(idbVal).trim();
+    if (window.electronAPI && window.electronAPI.savePersistentConfig) {
+      window.electronAPI.savePersistentConfig({ instanceName: cleanIdb }).catch(() => {});
+    }
+    return cleanIdb;
+  }
+
+  // 3. Fallback para localStorage
+  const localVal = localStorage.getItem(FGW.STORAGE_KEYS.INSTANCE_NAME) || '';
+  if (localVal && localVal.trim()) {
+    const cleanLocal = localVal.trim();
+    if (window.electronAPI && window.electronAPI.savePersistentConfig) {
+      window.electronAPI.savePersistentConfig({ instanceName: cleanLocal }).catch(() => {});
+    }
+    return cleanLocal;
+  }
+
+  return '';
 };
 
 FGW.deleteInstanceNameFromIndexedDB = async function() {
   try { localStorage.removeItem(FGW.STORAGE_KEYS.INSTANCE_NAME); } catch (e) {}
+
+  if (window.electronAPI && window.electronAPI.savePersistentConfig) {
+    try {
+      await window.electronAPI.savePersistentConfig({ instanceName: '' });
+    } catch (err) {
+      console.warn('[Storage] Falha ao limpar instância do disco:', err);
+    }
+  }
+
   return FGW.deleteFromIndexedDB('instanceName');
 };
 
