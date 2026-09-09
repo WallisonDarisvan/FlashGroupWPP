@@ -25,7 +25,7 @@
 | Atributo | Descrição / Especificação |
 | :--- | :--- |
 | **Nome da Aplicação** | FlashGroup WPP |
-| **Versão Atual** | `v1.0.3` |
+| **Versão Atual** | `v1.0.4` |
 | **Plataforma Alvo** | Windows (x64) com suporte nativo de empacotamento NSIS |
 | **App User Model ID** | `com.flashgroupwpp.app` |
 | **Tecnologias do Core** | Electron 35, Node.js, Axios, dotenv |
@@ -93,7 +93,7 @@ A aplicação implementa o padrão de segurança recomendado pelo Electron com *
 * **`icon.ico`**: Ícone em múltiplos tamanhos (256x256, 128x128, etc.) utilizado na barra de tarefas, janelas e instalador NSIS.
 
 ### Diretório `dist/` (Gerado em compilação)
-* **`FlashGroupWPP Setup 1.0.3.exe`**: Instalador auto-executável para Windows.
+* **`FlashGroupWPP Setup 1.0.4.exe`**: Instalador auto-executável para Windows.
 * **`latest.yml`**: Manifesto com checksums SHA512, tamanho e versão para o sistema de auto-atualização.
 
 ### Diretório `renderer/` (Camada Visual)
