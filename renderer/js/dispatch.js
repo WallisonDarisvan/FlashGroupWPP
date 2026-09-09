@@ -186,6 +186,15 @@ FGW.handleStartDispatch = async function() {
         const chosenPoll = validPolls[Math.floor(Math.random() * validPolls.length)];
         pollPayload = FGW.applyDynamicTagsToPoll(chosenPoll, currentGroup);
 
+        let mentionsList = undefined;
+        if (typeof FGW.shouldMentionEveryone === 'function' && FGW.shouldMentionEveryone(chosenPoll, pollPayload.name)) {
+          const fetched = await FGW.getGroupMentions(instanceName, currentGroup.id);
+          if (fetched && fetched.length > 0) {
+            mentionsList = fetched;
+            FGW.log('INFO', `[MENÇÃO A TODOS] Marcando ${fetched.length} participantes na enquete para ${groupIdentifierLabel}...`, 'info');
+          }
+        }
+
         FGW.log('INFO', `[${i + 1}/${dispatchQueue.length}] [ENQUETE] Enviando enquete "${pollPayload.name}" (${pollPayload.values.length} opções) para ${groupIdentifierLabel}...`, 'info');
 
         result = await window.electronAPI.sendPoll({
@@ -194,7 +203,8 @@ FGW.handleStartDispatch = async function() {
           name: pollPayload.name,
           selectableCount: pollPayload.selectableCount,
           values: pollPayload.values,
-          delay: presenceDelay
+          delay: presenceDelay,
+          mentioned: mentionsList
         });
       } else {
         // ================================================================
@@ -205,6 +215,15 @@ FGW.handleStartDispatch = async function() {
         chosenVariation = pool[Math.floor(Math.random() * pool.length)];
         processedText = FGW.applyDynamicTags(chosenVariation.text, currentGroup);
         const scopeTag = groupVarsData.isCustom ? '[EXCLUSIVA DO GRUPO]' : '[PADRÃO GERAL]';
+
+        let mentionsList = undefined;
+        if (typeof FGW.shouldMentionEveryone === 'function' && FGW.shouldMentionEveryone(chosenVariation, chosenVariation.text)) {
+          const fetched = await FGW.getGroupMentions(instanceName, currentGroup.id);
+          if (fetched && fetched.length > 0) {
+            mentionsList = fetched;
+            FGW.log('INFO', `[MENÇÃO A TODOS] Marcando ${fetched.length} participantes na mensagem para ${groupIdentifierLabel}...`, 'info');
+          }
+        }
 
         hasActiveMedia = Boolean(chosenVariation.media && chosenVariation.media.dataUrl && chosenVariation.mediaEnabled !== false);
 
@@ -220,7 +239,8 @@ FGW.handleStartDispatch = async function() {
             fileName: chosenVariation.media.fileName,
             caption: processedText,
             thumbnail: mediaThumb,
-            delay: presenceDelay
+            delay: presenceDelay,
+            mentioned: mentionsList
           });
         } else {
           const sendNote = (chosenVariation.media && chosenVariation.mediaEnabled === false) ? ' [Mídia pausada: enviando apenas texto]' : '';
@@ -229,7 +249,8 @@ FGW.handleStartDispatch = async function() {
             instanceName,
             number: currentGroup.id,
             text: processedText,
-            delay: presenceDelay
+            delay: presenceDelay,
+            mentioned: mentionsList
           });
         }
       }

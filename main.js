@@ -420,9 +420,68 @@ function setupIpcHandlers() {
   });
 
   /**
+   * Handler: Buscar Participantes de um Grupo para Menções (@todos)
+   */
+  ipcMain.handle('api:fetch-group-participants', async (_event, { instanceName, groupJid }) => {
+    try {
+      validateCredentials();
+      const trimmedName = (instanceName || '').trim();
+      const jid = (groupJid || '').trim();
+      if (!trimmedName || !jid) {
+        return { success: false, error: 'Instância e JID do grupo são obrigatórios.' };
+      }
+
+      let formattedJid = jid;
+      if (!formattedJid.endsWith('@g.us') && !formattedJid.includes('@')) {
+        formattedJid = `${formattedJid}@g.us`;
+      }
+
+      const endpoint = `${EVOLUTION_API_URL}/group/findGroupInfos/${encodeURIComponent(trimmedName)}?groupJid=${encodeURIComponent(formattedJid)}`;
+      const response = await axios.get(endpoint, {
+        headers: { apikey: EVOLUTION_API_KEY },
+        timeout: 20000
+      });
+
+      const participants = response.data?.participants || [];
+      const mentions = [];
+      for (const p of participants) {
+        if (p.phoneNumber && !mentions.includes(p.phoneNumber)) {
+          mentions.push(p.phoneNumber);
+        }
+        if (p.id && !mentions.includes(p.id)) {
+          mentions.push(p.id);
+        }
+      }
+
+      return {
+        success: true,
+        data: {
+          participantsCount: participants.length,
+          mentions
+        }
+      };
+    } catch (error) {
+      const status = error.response?.status;
+      const responseData = error.response?.data;
+      let errorMsg = error.message;
+
+      if (responseData && typeof responseData === 'object') {
+        errorMsg = responseData.message || responseData.error || JSON.stringify(responseData);
+      }
+
+      console.warn(`[api:fetch-group-participants] Falha ao buscar participantes do grupo ${groupJid}:`, errorMsg);
+      return {
+        success: false,
+        status,
+        error: `Erro ao buscar participantes: ${errorMsg}`
+      };
+    }
+  });
+
+  /**
    * Handler: Enviar Mensagem para Grupo
    */
-  ipcMain.handle('api:send-message', async (_event, { instanceName, number, text, delay }) => {
+  ipcMain.handle('api:send-message', async (_event, { instanceName, number, text, delay, mentioned }) => {
     try {
       validateCredentials();
       const trimmedName = (instanceName || '').trim();
@@ -441,6 +500,10 @@ function setupIpcHandlers() {
         text: text,
         delay: Number(delay) || 1200
       };
+
+      if (Array.isArray(mentioned) && mentioned.length > 0) {
+        payload.mentioned = mentioned;
+      }
 
       console.log(`[api:send-message] Enviando mensagem para ${formattedNumber} usando instância "${trimmedName}"...`);
       const response = await axios.post(endpoint, payload, {
@@ -477,7 +540,7 @@ function setupIpcHandlers() {
   /**
    * Handler: Enviar Enquete (Poll) para Grupo
    */
-  ipcMain.handle('api:send-poll', async (_event, { instanceName, number, name, selectableCount, values, delay }) => {
+  ipcMain.handle('api:send-poll', async (_event, { instanceName, number, name, selectableCount, values, delay, mentioned }) => {
     try {
       validateCredentials();
       const trimmedName = (instanceName || '').trim();
@@ -503,6 +566,10 @@ function setupIpcHandlers() {
         values: cleanValues,
         delay: Number(delay) || 1200
       };
+
+      if (Array.isArray(mentioned) && mentioned.length > 0) {
+        payload.mentioned = mentioned;
+      }
 
       console.log(`[api:send-poll] Enviando enquete "${payload.name}" (${payload.values.length} opções) para ${formattedNumber} via "${trimmedName}"...`);
       const response = await axios.post(endpoint, payload, {
@@ -799,7 +866,7 @@ function setupIpcHandlers() {
   /**
    * Handler: Enviar Mídia (Imagem, Vídeo, Documento) com Legenda
    */
-  ipcMain.handle('api:send-media', async (_event, { instanceName, number, media, mediatype, mimetype, fileName, caption, thumbnail, delay }) => {
+  ipcMain.handle('api:send-media', async (_event, { instanceName, number, media, mediatype, mimetype, fileName, caption, thumbnail, delay, mentioned }) => {
     try {
       validateCredentials();
       const trimmedName = (instanceName || '').trim();
@@ -842,11 +909,15 @@ function setupIpcHandlers() {
         // Caso haja texto associado a este áudio na variação, envia como mensagem complementar
         if (caption && caption.trim()) {
           try {
-            await axios.post(`${EVOLUTION_API_URL}/message/sendText/${encodeURIComponent(trimmedName)}`, {
+            const compPayload = {
               number: formattedNumber,
               text: caption.trim(),
               delay: 600
-            }, {
+            };
+            if (Array.isArray(mentioned) && mentioned.length > 0) {
+              compPayload.mentioned = mentioned;
+            }
+            await axios.post(`${EVOLUTION_API_URL}/message/sendText/${encodeURIComponent(trimmedName)}`, compPayload, {
               headers: {
                 apikey: EVOLUTION_API_KEY,
                 'Content-Type': 'application/json'
@@ -903,6 +974,10 @@ function setupIpcHandlers() {
         fileName: fileName || 'arquivo',
         delay: Number(delay) || 1200
       };
+
+      if (Array.isArray(mentioned) && mentioned.length > 0) {
+        payload.mentioned = mentioned;
+      }
 
       if (thumbBase64) {
         payload.thumbnail = thumbBase64;

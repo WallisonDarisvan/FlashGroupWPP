@@ -1286,6 +1286,52 @@ body {
   border-color: #fbbf24;
 }
 
+.btn-tag-chip.chip-mention {
+  background: rgba(168, 85, 247, 0.14);
+  border-color: rgba(168, 85, 247, 0.38);
+  color: #c084fc;
+}
+.btn-tag-chip.chip-mention:hover {
+  background: rgba(168, 85, 247, 0.26);
+  border-color: #a855f7;
+  color: #e9d5ff;
+}
+
+.mention-toggle-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.76rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 3px 8px;
+  transition: var(--transition);
+}
+.mention-toggle-label:hover {
+  background: rgba(168, 85, 247, 0.12);
+  border-color: rgba(168, 85, 247, 0.4);
+  color: var(--text-primary);
+}
+.mention-toggle-label input[type="checkbox"] {
+  accent-color: #a855f7;
+  cursor: pointer;
+  margin: 0;
+  width: 13px;
+  height: 13px;
+}
+.mention-toggle-label.active {
+  background: rgba(168, 85, 247, 0.2);
+  border-color: #a855f7;
+  color: #f3e8ff;
+  font-weight: 600;
+  box-shadow: 0 0 8px rgba(168, 85, 247, 0.25);
+}
+
 .chip-type-subtle {
   font-size: 0.65rem;
   opacity: 0.75;

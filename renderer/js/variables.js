@@ -57,7 +57,8 @@ FGW.applyDynamicTags = function(templateText, group) {
 
   let processed = templateText
     .replace(/\{ID\s*do\s*Grupo\}/gi, customIdentifier)
-    .replace(/\{Nome\s*do\s*Grupo\}/gi, group.subject || customIdentifier);
+    .replace(/\{Nome\s*do\s*Grupo\}/gi, group.subject || customIdentifier)
+    .replace(/\{Todos\}/gi, '@todos');
 
   // Substituição de todas as variáveis customizadas
   if (Array.isArray(state.customVariables)) {
@@ -103,7 +104,16 @@ FGW.renderDynamicTagChips = function() {
   chipGroupName.addEventListener('click', () => FGW.insertTagIntoActiveTextarea('Nome do Grupo'));
   fragment.appendChild(chipGroupName);
 
-  // 3. Tags Personalizadas criadas pelo usuário
+  // 3. Tag: {Todos} (Mencionar Todos)
+  const chipEveryone = document.createElement('button');
+  chipEveryone.type = 'button';
+  chipEveryone.className = 'btn-tag-chip chip-mention';
+  chipEveryone.title = 'Menciona todos os participantes do grupo no WhatsApp (@todos)';
+  chipEveryone.innerHTML = `<code>📢 {Todos}</code>`;
+  chipEveryone.addEventListener('click', () => FGW.insertTagIntoActiveTextarea('Todos'));
+  fragment.appendChild(chipEveryone);
+
+  // 4. Tags Personalizadas criadas pelo usuário
   if (Array.isArray(FGW.state.customVariables)) {
     FGW.state.customVariables.forEach(v => {
       const chip = document.createElement('button');
@@ -357,3 +367,47 @@ window.renderDynamicTagChips = FGW.renderDynamicTagChips;
 window.openVariablesModal = FGW.openVariablesModal;
 window.closeVariablesModal = FGW.closeVariablesModal;
 window.applyDynamicTags = FGW.applyDynamicTags;
+
+/**
+ * Cache de participantes de grupos para menções rápidas
+ */
+FGW.groupParticipantsCache = new Map();
+
+/**
+ * Busca e memoriza participantes do grupo para menção @todos
+ * @param {string} instanceName
+ * @param {string} groupId
+ * @returns {Promise<string[]>}
+ */
+FGW.getGroupMentions = async function(instanceName, groupId) {
+  if (!instanceName || !groupId) return [];
+  const cacheKey = `${instanceName}:${groupId}`;
+  if (FGW.groupParticipantsCache.has(cacheKey)) {
+    return FGW.groupParticipantsCache.get(cacheKey);
+  }
+  try {
+    const res = await window.electronAPI.fetchGroupParticipants({ instanceName, groupJid: groupId });
+    if (res && res.success && res.data?.mentions) {
+      FGW.groupParticipantsCache.set(cacheKey, res.data.mentions);
+      return res.data.mentions;
+    }
+  } catch (err) {
+    console.warn('[FGW.getGroupMentions] Erro ao buscar participantes:', err);
+  }
+  return [];
+};
+
+/**
+ * Verifica se uma variação ou texto deve acionar a menção @todos
+ * @param {Object} item - Objeto da variação ou enquete
+ * @param {string} text - Texto ou pergunta
+ * @returns {boolean}
+ */
+FGW.shouldMentionEveryone = function(item, text) {
+  if (item && item.mentionAll) return true;
+  const str = String(text || '');
+  return /@todos\b/i.test(str) || /@everyone\b/i.test(str) || /\{Todos\}/i.test(str);
+};
+
+window.getGroupMentions = FGW.getGroupMentions;
+window.shouldMentionEveryone = FGW.shouldMentionEveryone;

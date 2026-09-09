@@ -323,6 +323,10 @@ FGW.renderPollVariations = function() {
           <span class="poll-card-title">Variação de Enquete</span>
         </div>
         <div class="poll-card-actions">
+          <label class="mention-toggle-label ${poll?.mentionAll ? 'active' : ''}" title="Marcar todos os participantes do grupo nesta enquete (@todos)">
+            <input type="checkbox" class="chk-poll-mention-all" data-poll-index="${pIndex}" ${poll?.mentionAll ? 'checked' : ''}>
+            <span>📢 @todos</span>
+          </label>
           <button type="button" class="btn-var-send-now" data-poll-index="${pIndex}" title="Enviar esta enquete agora para o grupo ativo">
             <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor">
               <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
@@ -349,7 +353,7 @@ FGW.renderPollVariations = function() {
         <div class="poll-field-group">
           <label class="poll-label">
             <span>Pergunta da Enquete</span>
-            <span class="poll-tag-tip">Aceita {ID do Grupo}, {Nome do Grupo}</span>
+            <span class="poll-tag-tip">Aceita {ID do Grupo}, {Nome do Grupo}, {Todos}</span>
           </label>
           <textarea 
             class="poll-question-input" 
@@ -411,6 +415,22 @@ FGW.attachPollEvents = function(container) {
       const pIndex = parseInt(btn.dataset.pollIndex, 10);
       if (FGW.handleSendPollToActiveGroup) {
         await FGW.handleSendPollToActiveGroup(pIndex, btn);
+      }
+    });
+  });
+
+  // Alternar Menção a Todos (@todos) na Enquete
+  container.querySelectorAll('.chk-poll-mention-all').forEach(chk => {
+    chk.addEventListener('change', (e) => {
+      const pIndex = parseInt(e.target.dataset.pollIndex, 10);
+      if (FGW.state.pollVariations && FGW.state.pollVariations[pIndex]) {
+        FGW.state.pollVariations[pIndex].mentionAll = e.target.checked;
+        const parentLabel = e.target.closest('.mention-toggle-label');
+        if (parentLabel) {
+          parentLabel.classList.toggle('active', e.target.checked);
+        }
+        FGW.savePollVariations();
+        FGW.log('INFO', `Menção a todos (@todos) ${e.target.checked ? 'ativada' : 'desativada'} na Enquete #${pIndex + 1}.`, 'info');
       }
     });
   });
@@ -735,13 +755,23 @@ FGW.handleSendPollToActiveGroup = async function(pollIndex, btnElement) {
   FGW.log('INFO', `Enviando enquete individual "${processedPoll.name}" para o grupo "${targetName}"...`, 'info');
 
   try {
+    let mentionsList = undefined;
+    if (typeof FGW.shouldMentionEveryone === 'function' && FGW.shouldMentionEveryone(poll, processedPoll.name)) {
+      const fetched = await FGW.getGroupMentions(instanceName, targetGroup.id);
+      if (fetched && fetched.length > 0) {
+        mentionsList = fetched;
+        FGW.log('INFO', `[MENÇÃO A TODOS] Marcando ${fetched.length} participantes na enquete para "${targetName}"...`, 'info');
+      }
+    }
+
     const result = await window.electronAPI.sendPoll({
       instanceName,
       number: targetGroup.id,
       name: processedPoll.name,
       selectableCount: processedPoll.selectableCount,
       values: processedPoll.values,
-      delay: 1000
+      delay: 1000,
+      mentioned: mentionsList
     });
 
     if (result && result.success) {

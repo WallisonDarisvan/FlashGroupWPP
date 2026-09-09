@@ -507,6 +507,10 @@ FGW.renderVariations = function() {
           ${previewBadgeHtml}
         </div>
         <div class="variation-actions">
+          <label class="mention-toggle-label ${item?.mentionAll ? 'active' : ''}" title="Marcar todos os participantes do grupo nesta mensagem (@todos)">
+            <input type="checkbox" class="chk-var-mention-all" data-index="${index}" ${item?.mentionAll ? 'checked' : ''}>
+            <span>📢 @todos</span>
+          </label>
           <button type="button" class="btn-var-send-now" data-index="${index}" title="Enviar esta variação agora para o grupo ativo">
             <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor">
               <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
@@ -536,7 +540,7 @@ FGW.renderVariations = function() {
 
     // Clique no Card ativa o preview desta variação e foca o textarea se o clique foi no card
     card.addEventListener('click', (e) => {
-      if (e.target.closest('button') || e.target.closest('input') || e.target.closest('textarea') || e.target.closest('.variation-media-preview')) return;
+      if (e.target.closest('button') || e.target.closest('input') || e.target.closest('label') || e.target.closest('textarea') || e.target.closest('.variation-media-preview')) return;
       
       const textarea = card.querySelector('textarea');
       if (textarea && e.target !== textarea) {
@@ -622,6 +626,27 @@ FGW.renderVariations = function() {
       if (FGW.state.activeMessageScope !== '__global__') {
         if (FGW.renderGroupsTable) FGW.renderGroupsTable();
         FGW.updateVariationScopeSelectorOptions();
+      }
+    });
+  });
+
+  // Alternar Menção a Todos (@todos) na Variação
+  elements.variationsList.querySelectorAll('.chk-var-mention-all').forEach(chk => {
+    chk.addEventListener('change', (e) => {
+      const idx = parseInt(e.target.dataset.index, 10);
+      const list = FGW.getCurrentActiveVariationsList();
+      if (list[idx]) {
+        list[idx].mentionAll = e.target.checked;
+        const parentLabel = e.target.closest('.mention-toggle-label');
+        if (parentLabel) {
+          parentLabel.classList.toggle('active', e.target.checked);
+        }
+        if (FGW.state.activeMessageScope === '__global__') {
+          FGW.saveVariations();
+        } else {
+          FGW.saveGroupCustomVariations();
+        }
+        FGW.log('INFO', `Menção a todos (@todos) ${e.target.checked ? 'ativada' : 'desativada'} na Variação #${idx + 1}.`, 'info');
       }
     });
   });
@@ -1697,6 +1722,15 @@ FGW.handleSendVariationToActiveGroup = async function(variationIndex, btnElement
     FGW.log('INFO', `Enviando Variação #${variationIndex + 1} para o grupo ativo "${targetName}"...`, 'info');
 
     let result;
+    let mentionsList = undefined;
+    if (typeof FGW.shouldMentionEveryone === 'function' && FGW.shouldMentionEveryone(item, rawText)) {
+      const fetched = await FGW.getGroupMentions(instanceName, groupId);
+      if (fetched && fetched.length > 0) {
+        mentionsList = fetched;
+        FGW.log('INFO', `[MENÇÃO A TODOS] Marcando ${fetched.length} participantes na mensagem para "${targetName}"...`, 'info');
+      }
+    }
+
     if (hasActiveMedia) {
       const mediaThumb = item.media.thumbnail || (typeof FGW.generateMediaThumbnail === 'function' ? await FGW.generateMediaThumbnail(item.media.dataUrl, item.media.mediatype) : null);
       result = await window.electronAPI.sendMediaMessage({
@@ -1708,14 +1742,16 @@ FGW.handleSendVariationToActiveGroup = async function(variationIndex, btnElement
         fileName: item.media.fileName,
         caption: processedText,
         thumbnail: mediaThumb,
-        delay: 500
+        delay: 500,
+        mentioned: mentionsList
       });
     } else {
       result = await window.electronAPI.sendMessage({
         instanceName,
         number: groupId,
         text: processedText,
-        delay: 500
+        delay: 500,
+        mentioned: mentionsList
       });
     }
 

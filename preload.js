@@ -30,8 +30,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   fetchGroups: (params) => ipcRenderer.invoke('api:fetch-groups', params),
 
   /**
+   * Busca participantes de um grupo para menções (@todos)
+   * @param {Object} params { instanceName, groupJid }
+   */
+  fetchGroupParticipants: (params) => ipcRenderer.invoke('api:fetch-group-participants', params),
+
+  /**
    * Envia uma mensagem de texto para um grupo do WhatsApp
-   * @param {Object} params { instanceName, number, text, delay }
+   * @param {Object} params { instanceName, number, text, delay, mentioned }
    */
   sendMessage: (params) => ipcRenderer.invoke('api:send-message', params),
 
