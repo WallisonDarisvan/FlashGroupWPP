@@ -18,6 +18,7 @@ FGW.getActiveInstanceName = function() {
 
 FGW.getCurrentActiveVariationsList = function() {
   const state = FGW.state;
+  state.groupCustomVariations = state.groupCustomVariations || {};
   if (state.activeMessageScope === '__global__') {
     return state.messageVariations;
   }
@@ -43,6 +44,7 @@ FGW.updateVariationScopeSelectorOptions = function() {
   const elements = FGW.elements || {};
   if (!elements.variationScopeSelector) return;
   const currentVal = FGW.state.activeMessageScope || '__global__';
+  FGW.state.groupCustomVariations = FGW.state.groupCustomVariations || {};
 
   let html = `<option value="__global__">🌐 Mensagens Gerais da Campanha (Padrão para todos)</option>`;
 
@@ -67,6 +69,7 @@ FGW.updateVariationScopeSelectorOptions = function() {
 FGW.handleScopeChange = function(newScopeId) {
   FGW.state.activeMessageScope = newScopeId;
   FGW.state.previewVariationIndex = 0;
+  FGW.state.groupCustomVariations = FGW.state.groupCustomVariations || {};
   const elements = FGW.elements || {};
 
   if (newScopeId === '__global__') {
@@ -86,6 +89,7 @@ FGW.handleScopeChange = function(newScopeId) {
 
 FGW.handleToggleGroupCustomVars = function() {
   if (FGW.state.activeMessageScope === '__global__') return;
+  FGW.state.groupCustomVariations = FGW.state.groupCustomVariations || {};
   const gId = FGW.state.activeMessageScope;
   if (!FGW.state.groupCustomVariations[gId]) {
     FGW.state.groupCustomVariations[gId] = { enabled: false, variations: [] };
@@ -134,7 +138,11 @@ FGW.handleCopyGlobalToGroup = function() {
 };
 
 FGW.getVariationsForGroup = function(group) {
-  const customConfig = FGW.state.groupCustomVariations[group.id];
+  if (!group || !group.id) {
+    return { isCustom: false, variations: FGW.getValidVariations ? FGW.getValidVariations() : [] };
+  }
+  const groupCustomMap = FGW.state.groupCustomVariations || {};
+  const customConfig = groupCustomMap[group.id];
   if (customConfig && customConfig.enabled && Array.isArray(customConfig.variations)) {
     const valid = customConfig.variations.filter(v => {
       if (!v) return false;

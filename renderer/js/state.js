@@ -15,6 +15,7 @@ FGW.state = {
   groupCustomTags: {}, // Mapeamento { [groupId]: 'Identificação personalizada' } ({ID do Grupo})
   customVariables: [], // Lista de variáveis: [{ name: 'Link', type: 'group'|'global', defaultValue: '' }]
   groupCustomVars: {}, // Mapeamento { [groupId]: { [varName]: 'valor' } }
+  groupCustomVariations: {}, // Mapeamento de variações exclusivas por grupo: { [groupId]: { enabled: boolean, variations: [] } }
   activeMessageScope: '__global__', // '__global__' ou groupId selecionado
   campaignType: 'messages', // 'messages' ou 'polls' (Modo exclusivo da campanha)
   pollVariations: [], // Lista de { id: string, name: string, selectableCount: number, values: string[] }

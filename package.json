@@ -1,6 +1,6 @@
 {
   "name": "flash-group-wpp",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Aplicação desktop profissional para envio automatizado e cadenciado de mensagens para grupos do WhatsApp via Evolution API v2",
   "main": "main.js",
   "scripts": {
@@ -62,7 +62,8 @@
           ]
         }
       ],
-      "icon": "build/icon.ico"
+      "icon": "build/icon.ico",
+      "artifactName": "FlashGroup.WPP.Setup.${version}.${ext}"
     },
     "nsis": {
       "oneClick": false,
@@ -72,7 +73,8 @@
       "createStartMenuShortcut": true,
       "shortcutName": "FlashGroup WPP",
       "uninstallDisplayName": "FlashGroup WPP",
-      "deleteAppDataOnUninstall": false
+      "deleteAppDataOnUninstall": false,
+      "artifactName": "FlashGroup.WPP.Setup.${version}.${ext}"
     }
   }
 }

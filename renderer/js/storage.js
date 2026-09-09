@@ -334,6 +334,8 @@ FGW.loadSavedSettings = function() {
     const savedGroupVars = localStorage.getItem(KEYS.GROUP_CUSTOM_VARIATIONS);
     if (savedGroupVars) {
       state.groupCustomVariations = JSON.parse(savedGroupVars) || {};
+    } else {
+      state.groupCustomVariations = state.groupCustomVariations || {};
     }
   } catch (e) {
     state.groupCustomVariations = {};
